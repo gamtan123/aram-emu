@@ -52,8 +52,10 @@ func (g *productGame) instance() *frontend.Shell {
 }
 
 func (g *productGame) flushSaveData() {
-	g.instance()
-	g.backend.FlushSaveData()
+	shell := g.instance()
+	if err := g.backend.FlushSaveData(); err != nil {
+		shell.ReportExternalOpenStatus("Game save: " + err.Error())
+	}
 }
 
 // productBackend adds product installation to the integration backend. The
