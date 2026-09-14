@@ -219,8 +219,7 @@ func run() int {
 		}
 	}
 	if err := backend.ConfigureAudio(frontend.AudioSettings{
-		MixMode:        *audioMode == "mix",
-		OutputChannels: 2,
+		MixMode: *audioMode == "mix",
 	}); err != nil {
 		result.Detail = err.Error()
 		result.ElapsedMS = time.Since(started).Milliseconds()
