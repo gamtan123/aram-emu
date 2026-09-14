@@ -101,3 +101,18 @@ func (backend *Backend) persistSaveData(machine aramcore.Machine, hash string) {
 		_ = os.Remove(temporary)
 	}
 }
+
+// FlushSaveData snapshots the loaded title's writable storage without stopping
+// it. Mobile hosts call this during an Activity pause because Android may kill
+// the process after it enters the background without giving the Go shell a
+// normal close path.
+func (backend *Backend) FlushSaveData() {
+	backend.operationMu.Lock()
+	defer backend.operationMu.Unlock()
+
+	machine := backend.currentMachine()
+	if machine == nil {
+		return
+	}
+	backend.persistSaveData(machine, backend.currentInputHash())
+}

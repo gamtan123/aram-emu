@@ -111,6 +111,21 @@ func TestBackendSaveExportImportRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFlushSaveDataPersistsRunningMachine(t *testing.T) {
+	backend := newSaveBackend(t, saveHashA, &saveStubMachine{data: []byte("saved before background")})
+
+	backend.FlushSaveData()
+
+	path := filepath.Join(backend.stateRoot, saveHashA, "savedata.bin")
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read flushed save data: %v", err)
+	}
+	if string(written) != "saved before background" {
+		t.Fatalf("flushed save data = %q", written)
+	}
+}
+
 func TestBackendSaveImportRejectsWrongTitle(t *testing.T) {
 	source := newSaveBackend(t, saveHashA, &saveStubMachine{data: []byte("save-A")})
 	blob, err := source.ExportSaveData()
