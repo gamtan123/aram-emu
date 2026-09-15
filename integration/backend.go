@@ -177,6 +177,17 @@ func (backend *Backend) OpenWithProgress(
 		source.ProfileID = imageInfo.ProfileID
 		imageSHA256 = imageInfo.ImageSHA256
 		info.ImageSHA256 = imageSHA256
+	} else if provider, ok := machine.(interface {
+		CheatImageSHA256() string
+		CheatProfileID() string
+	}); ok {
+		// SKVM executes Java classes rather than a mapped ARM image. Its class
+		// digest is the equivalent stable executable identity and also keys the
+		// deterministic virtual class regions used by the cheat engine.
+		imageSHA256 = provider.CheatImageSHA256()
+		info.ImageSHA256 = imageSHA256
+		info.ProfileID = provider.CheatProfileID()
+		source.ProfileID = info.ProfileID
 	}
 	// Wrapping happens before the machine is published so every later command
 	// goes through the wrapper that serializes cheats with guest execution.
