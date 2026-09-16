@@ -3,97 +3,58 @@ name: Build ARAM Android ARM32
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
-  build:
+  build-arm32:
     name: Build armeabi-v7a APK
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
-
-      # ============================================================
-      # 1. ARAM source
-      # ============================================================
-
-      - name: Checkout ARAM-EMU
-        uses: actions/checkout@v4
+      # ==========================================
+      # 1. Checkout ARAM-EMU
+      # ==========================================
+      - name: Checkout aram-emu
+        uses: actions/checkout@v5
         with:
-          repository: gamtan123/aram-emu
-          ref: main
           path: aram-emu
-          fetch-depth: 1
 
-      - name: Checkout ARAM-CORE
-        uses: actions/checkout@v4
+      # ==========================================
+      # 2. Checkout components
+      # ==========================================
+      - name: Checkout aram-core
+        uses: actions/checkout@v5
         with:
           repository: mirusu400/aram-core
-          ref: main
           path: aram-core
-          fetch-depth: 1
 
-      - name: Checkout ARAM-FRONTEND
-        uses: actions/checkout@v4
+      - name: Checkout aram-frontend
+        uses: actions/checkout@v5
         with:
           repository: mirusu400/aram-frontend
-          ref: main
           path: aram-frontend
-          fetch-depth: 1
 
-      - name: Checkout ARAM-AUTHD
-        uses: actions/checkout@v4
+      - name: Checkout aram-authd
+        uses: actions/checkout@v5
         with:
           repository: mirusu400/aram-authd
-          ref: main
           path: aram-authd
-          fetch-depth: 1
 
-
-      # ============================================================
-      # 2. Go
-      # ============================================================
-
+      # ==========================================
+      # 3. Go
+      # ==========================================
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.26.x"
+          go-version: '1.26.x'
+          cache: false
 
-
-      # ============================================================
-      # 3. Java
-      # ============================================================
-
+      # ==========================================
+      # 4. Java
+      # ==========================================
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-
-      # ============================================================
-      # 4. Android SDK
-      # ============================================================
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: ""
-
-
-      # ============================================================
-      # 5. Android SDK / NDK
-      # ============================================================
-
-      - name: Install Android SDK and NDK
-        shell: bash
-        run: |
-          set -eux
-
-          echo "=========================================="
-          echo "Android SDK"
-          echo "=========================================="
-
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-
-          echo
+      # ==========================================
+      # 5.
