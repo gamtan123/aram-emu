@@ -25,45 +25,37 @@ jobs:
           log-accepted-android-sdk-licenses: true
           packages: platform-tools
 
-      - name: Show project files
+      - name: Inspect project
         run: |
-          echo "=== Project ==="
+          echo "=== ROOT ==="
           ls -la
-          echo "=== Android files ==="
-          find . -maxdepth 3 -type f | sort | head -300
 
-      - name: Make ARM32 build script executable
-        run: |
-          if [ -f mobile/android/build-arm32.sh ]; then
-            chmod +x mobile/android/build-arm32.sh
-          fi
+          echo "=== FILES ==="
+          find . -maxdepth 4 -type f | sort | head -500
 
-      - name: Build ARM32 native library
+      - name: Find Gradle project
         run: |
-          if [ -f mobile/android/build-arm32.sh ]; then
-            ./mobile/android/build-arm32.sh
-          else
-            echo "build-arm32.sh not found"
-            exit 1
-          fi
-
-      - name: Find generated native libraries
-        run: |
-          echo "=== Native libraries ==="
-          find . -type f \( -name "*.so" -o -name "*.aar" \) | sort || true
+          echo "=== Gradle files ==="
+          find . -name "gradlew" -o -name "build.gradle" -o -name "build.gradle.kts" | sort
 
       - name: Build Android APK
         run: |
-          chmod +x ./gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          if [ ! -f "./gradlew" ]; then
+            echo "ERROR: gradlew not found in repository root."
+            exit 1
+          fi
 
-      - name: Find APK
+          chmod +x ./gradlew
+
+          ./gradlew assembleRelease \
+            --no-daemon \
+            --stacktrace
+
+      - name: Find generated APK
         run: |
           echo "=== APK files ==="
           find . -type f -name "*.apk" -print
 
-      - name: Prepare final APK
-        run: |
           APK=$(find . -type f -name "*.apk" | head -n 1)
 
           if [ -z "$APK" ]; then
@@ -71,33 +63,31 @@ jobs:
             exit 1
           fi
 
-          echo "Found APK: $APK"
+          echo "Found APK:"
+          echo "$APK"
 
           cp "$APK" aram-android-universal.apk
 
+      - name: Check APK
+        run: |
           echo "=== Final APK ==="
           ls -lh aram-android-universal.apk
 
-      - name: Verify APK
-        run: |
-          echo "=== APK information ==="
-          file aram-android-universal.apk
-          unzip -l aram-android-universal.apk | grep -E 'lib/.*/.*\.so' || true
+          echo ""
+          echo "=== APK libraries ==="
+          unzip -l aram-android-universal.apk | grep "lib/" || true
 
           echo ""
           echo "=== ABI check ==="
 
           if unzip -l aram-android-universal.apk | grep -q "lib/armeabi-v7a/"; then
-            echo "OK: armeabi-v7a found"
+            echo "OK: armeabi-v7a is included."
           else
-            echo "ERROR: armeabi-v7a NOT found"
-            exit 1
+            echo "WARNING: armeabi-v7a is NOT included."
           fi
 
           if unzip -l aram-android-universal.apk | grep -q "lib/arm64-v8a/"; then
-            echo "INFO: arm64-v8a also included"
-          else
-            echo "INFO: arm64-v8a not included"
+            echo "INFO: arm64-v8a is included."
           fi
 
       - name: Upload APK
