@@ -10,8 +10,9 @@ env:
   # ============================================================
   # ARAM component versions
   #
-  # Uploaded ARAM APK에서 확인한 component commit
+  # 기존 APK BUILD-INFO에서 확인한 component commit
   # ============================================================
+
   ARAM_CORE_COMMIT: "7f699ecd04ecc22a031905a5d15f17e2b3818843"
   ARAM_FRONTEND_COMMIT: "3f3ff549199a4593ba5a7a0e86f59d1494d9658d"
   ARAM_AUTHD_COMMIT: "4053607356dd89e621740388f7ec761e27ecee58"
@@ -21,10 +22,11 @@ env:
   GRADLE_VERSION: "8.14.1"
   ANDROID_NDK_VERSION: "28.2.13676358"
 
+
 jobs:
 
   # ============================================================
-  # ARM32 Android build
+  # ARM32 Android
   # ============================================================
 
   build-arm32:
@@ -33,16 +35,14 @@ jobs:
 
     runs-on: ubuntu-24.04
 
+
     steps:
 
       # ==========================================================
       # 1. Checkout ARAM-EMU
       #
-      # 중요:
-      # 이전에는 존재하지 않는 commit을 지정해서
-      # Checkout 단계에서 실패했다.
-      #
-      # 이번에는 네 fork의 main 사용
+      # aram-emu의 이전 SHA는 공개 저장소에서 checkout되지 않아
+      # main을 사용한다.
       # ==========================================================
 
       - name: Checkout ARAM-EMU
@@ -54,6 +54,7 @@ jobs:
           ref: main
           path: aram-emu
           fetch-depth: 1
+
 
       # ==========================================================
       # 2. Checkout ARAM-CORE
@@ -69,6 +70,7 @@ jobs:
           path: aram-core
           fetch-depth: 1
 
+
       # ==========================================================
       # 3. Checkout ARAM-FRONTEND
       # ==========================================================
@@ -82,6 +84,7 @@ jobs:
           ref: ${{ env.ARAM_FRONTEND_COMMIT }}
           path: aram-frontend
           fetch-depth: 1
+
 
       # ==========================================================
       # 4. Checkout ARAM-AUTHD
@@ -97,6 +100,7 @@ jobs:
           path: aram-authd
           fetch-depth: 1
 
+
       # ==========================================================
       # 5. Setup Go
       # ==========================================================
@@ -107,6 +111,7 @@ jobs:
 
         with:
           go-version: ${{ env.GO_VERSION }}
+
 
       # ==========================================================
       # 6. Setup Java
@@ -120,8 +125,9 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
+
       # ==========================================================
-      # 7. Setup Android SDK
+      # 7. Android SDK
       # ==========================================================
 
       - name: Setup Android SDK
@@ -130,6 +136,7 @@ jobs:
 
         with:
           packages: ""
+
 
       # ==========================================================
       # 8. Install Android SDK / NDK
@@ -148,6 +155,7 @@ jobs:
             "platforms;android-36" \
             "build-tools;35.0.0" \
             "ndk;${ANDROID_NDK_VERSION}"
+
 
       # ==========================================================
       # 9. Configure Android NDK
@@ -169,9 +177,11 @@ jobs:
           echo "=========================================="
           echo "Android NDK"
           echo "=========================================="
+
           echo "$NDK"
 
           test -d "$NDK"
+
 
       # ==========================================================
       # 10. Setup Gradle
@@ -184,8 +194,9 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
+
       # ==========================================================
-      # 11. Show versions / commits
+      # 11. Show build information
       # ==========================================================
 
       - name: Show build information
@@ -202,12 +213,14 @@ jobs:
 
           go version
 
+
           echo
           echo "=========================================="
           echo "Java"
           echo "=========================================="
 
           java -version
+
 
           echo
           echo "=========================================="
@@ -216,9 +229,10 @@ jobs:
 
           gradle --version
 
+
           echo
           echo "=========================================="
-          echo "Source commits"
+          echo "Source revisions"
           echo "=========================================="
 
           echo "ARAM-EMU:"
@@ -235,6 +249,7 @@ jobs:
           echo
           echo "ARAM-AUTHD:"
           git -C aram-authd rev-parse HEAD
+
 
       # ==========================================================
       # 12. Check Go workspace
@@ -258,6 +273,7 @@ jobs:
             cat go.work
           fi
 
+
           echo
           echo "=========================================="
           echo "go.mod"
@@ -265,19 +281,19 @@ jobs:
 
           cat go.mod
 
+
       # ==========================================================
       # 13. ARM32 compatibility patch
       #
-      # ARM32 Go:
-      #
-      # int = 32-bit
+      # ARM32에서 Go int는 32-bit이다.
       #
       # 따라서:
       #
       # int(^uint32(0))
       #
-      # 는 4294967295를 32-bit int로 변환하려고 해서
-      # compile error 발생.
+      # 는 overflow 발생.
+      #
+      # 이를 uint64 비교로 변경한다.
       # ==========================================================
 
       - name: Patch ARAM-CORE for ARM32
@@ -290,18 +306,29 @@ jobs:
 
           FILE="aram-core/application/internal/ktf/ktf_state.go"
 
-          test -f "$FILE"
+          if [ ! -f "$FILE" ]; then
+
+            echo "ERROR:"
+            echo "$FILE not found."
+
+            exit 1
+
+          fi
+
 
           python3 <<'PY'
           from pathlib import Path
 
-          path = Path("aram-core/application/internal/ktf/ktf_state.go")
+          path = Path(
+              "aram-core/application/internal/ktf/ktf_state.go"
+          )
 
           text = path.read_text()
 
           old = "if len(serviceState) > int(^uint32(0)) {"
 
           new = "if uint64(len(serviceState)) > uint64(^uint32(0)) {"
+
 
           if old in text:
 
@@ -311,51 +338,65 @@ jobs:
 
               print("ARM32 compatibility patch applied.")
 
+
           elif new in text:
 
               print("ARM32 compatibility patch already exists.")
 
+
           else:
 
-              print("Target expression was not found.")
+              print(
+                  "ERROR: Expected ARM32 overflow expression "
+                  "was not found."
+              )
 
-              for i, line in enumerate(text.splitlines(), 1):
+              print()
+              print("Searching serviceState references:")
+
+              for i, line in enumerate(
+                  text.splitlines(),
+                  1
+              ):
 
                   if "serviceState" in line:
 
                       print(f"{i}: {line}")
 
-              raise SystemExit(
-                  "ERROR: ARM32 compatibility target not found."
-              )
+              raise SystemExit(1)
+
           PY
+
 
           echo
           echo "=========================================="
           echo "Patched source"
           echo "=========================================="
 
+
           grep -n -A5 -B5 \
             "serviceState" \
             "$FILE" \
             | head -50
 
+
       # ==========================================================
-      # 14. Configure ARM32 Android C compiler
+      # 14. Configure Android ARM32 Clang
       #
       # 중요:
       #
-      # 이전 실패:
+      # Ubuntu 기본 gcc는 x86_64.
       #
-      # gcc: error:
-      # unrecognized command-line option '-marm'
+      # ARM32 빌드에서 -marm을 받으면:
       #
-      # 원인은 Ubuntu 기본 x86_64 GCC가 사용된 것.
+      # gcc: unrecognized command-line option '-marm'
       #
-      # 이번에는 Android NDK clang을 직접 사용한다.
+      # 오류가 발생한다.
+      #
+      # 따라서 Android NDK clang을 사용한다.
       # ==========================================================
 
-      - name: Configure ARM32 Android Clang
+      - name: Configure Android ARM32 Clang
 
         shell: bash
 
@@ -367,67 +408,100 @@ jobs:
 
           LLVM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
-          test -x "$LLVM/clang"
 
+          echo "=========================================="
+          echo "NDK LLVM"
+          echo "=========================================="
+
+          echo "$LLVM"
+
+
+          test -x "$LLVM/clang"
           test -x "$LLVM/clang++"
 
-          echo "=========================================="
-          echo "NDK Clang"
-          echo "=========================================="
-
-          "$LLVM/clang" --version
 
           echo
           echo "=========================================="
-          echo "Creating ARM32 compiler wrappers"
+          echo "Clang version"
           echo "=========================================="
 
+
+          "$LLVM/clang" --version
+
+
+          # ------------------------------------------------------
+          # ARM32 C compiler wrapper
+          # ------------------------------------------------------
+
           cat > /tmp/aram-arm32-clang <<EOF
-          #!/bin/bash
-          exec "$LLVM/clang" \
-            --target=armv7a-linux-androideabi23 \
-            "\$@"
-          EOF
+#!/bin/bash
+
+exec "$LLVM/clang" \
+  --target=armv7a-linux-androideabi23 \
+  "\$@"
+EOF
+
+
+          # ------------------------------------------------------
+          # ARM32 C++ compiler wrapper
+          # ------------------------------------------------------
 
           cat > /tmp/aram-arm32-clang++ <<EOF
-          #!/bin/bash
-          exec "$LLVM/clang++" \
-            --target=armv7a-linux-androideabi23 \
-            "\$@"
-          EOF
+#!/bin/bash
+
+exec "$LLVM/clang++" \
+  --target=armv7a-linux-androideabi23 \
+  "\$@"
+EOF
+
 
           chmod +x /tmp/aram-arm32-clang
           chmod +x /tmp/aram-arm32-clang++
 
-          echo "CC=/tmp/aram-arm32-clang" >> "$GITHUB_ENV"
-          echo "CXX=/tmp/aram-arm32-clang++" >> "$GITHUB_ENV"
+
+          echo "CC=/tmp/aram-arm32-clang" \
+            >> "$GITHUB_ENV"
+
+          echo "CXX=/tmp/aram-arm32-clang++" \
+            >> "$GITHUB_ENV"
+
 
           echo
           echo "=========================================="
           echo "Testing ARM32 compiler"
           echo "=========================================="
 
+
           cat > /tmp/test-arm32.c <<'EOF'
-          int main(void) {
+          int main(void)
+          {
               return 0;
           }
           EOF
+
 
           /tmp/aram-arm32-clang \
             -marm \
             /tmp/test-arm32.c \
             -o /tmp/test-arm32
 
+
           file /tmp/test-arm32
+
 
           echo
           echo "ARM32 compiler test PASSED."
 
+
       # ==========================================================
       # 15. Install ebitenmobile
       #
-      # ARAM이 사용하는 Ebitengine 버전을 읽어서
-      # 같은 버전의 ebitenmobile 사용
+      # 주의:
+      #
+      # 여기서는 GOARCH=arm을 설정하지 않는다.
+      #
+      # ebitenmobile/gomobile 자체는 GitHub runner의
+      # x86_64에서 실행되어야 한다.
       # ==========================================================
 
       - name: Install ebitenmobile
@@ -440,38 +514,52 @@ jobs:
 
           set -eux
 
+
           EBitenVersion="$(
             go list -m -f '{{.Version}}' \
               github.com/hajimehoshi/ebiten/v2
           )"
 
-          echo "Ebitengine version:"
+
+          echo "=========================================="
+          echo "Ebitengine version"
+          echo "=========================================="
+
           echo "$EBitenVersion"
+
 
           go install \
             "github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@${EBitenVersion}"
 
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+          echo "$(go env GOPATH)/bin" \
+            >> "$GITHUB_PATH"
+
 
           echo
-          echo "ebitenmobile:"
+          echo "=========================================="
+          echo "ebitenmobile"
+          echo "=========================================="
+
+
           ebitenmobile version || true
+
 
       # ==========================================================
       # 16. Build ARM32 AAR
       #
-      # 핵심:
+      # 매우 중요:
       #
-      # GOARCH=arm
-      # GOARM=7
+      # GOARCH=arm을 직접 지정하지 않는다.
       #
-      # ebitenmobile:
+      # ARM32 대상은 ebitenmobile의:
       #
-      # -target android/arm
+      #     -target android/arm
       #
-      # 결과:
+      # 로 지정한다.
       #
-      # armeabi-v7a
+      # 이렇게 해야 gomobile 자체가 ARM32 executable로
+      # 만들어지는 문제를 방지할 수 있다.
       # ==========================================================
 
       - name: Build ARM32 AAR
@@ -481,37 +569,58 @@ jobs:
         shell: bash
 
         env:
-          CGO_ENABLED: "1"
 
-          GOOS: android
-          GOARCH: arm
-          GOARM: "7"
+          CGO_ENABLED: "1"
 
         run: |
 
           set -eux
 
+
           mkdir -p android/app/libs
+
           mkdir -p android/app/src/main/assets
+
 
           echo "=========================================="
           echo "Building ARM32 AAR"
           echo "=========================================="
 
-          echo "GOOS=$GOOS"
-          echo "GOARCH=$GOARCH"
-          echo "GOARM=$GOARM"
-          echo "CC=$CC"
-          echo "CXX=$CXX"
+
+          echo "Host OS:"
+          go env GOHOSTOS
+
 
           echo
-          echo "Target: android/arm"
-          echo "ABI: armeabi-v7a"
+          echo "Host architecture:"
+          go env GOHOSTARCH
+
+
+          echo
+          echo "Compiler:"
+          echo "$CC"
+
+
+          echo
+          echo "C++ compiler:"
+          echo "$CXX"
+
+
+          echo
+          echo "Android target:"
+          echo "android/arm"
+
+
+          echo
+          echo "Android ABI:"
+          echo "armeabi-v7a"
+
 
           echo
           echo "=========================================="
           echo "ebitenmobile bind"
           echo "=========================================="
+
 
           ebitenmobile bind \
             -target android/arm \
@@ -522,14 +631,19 @@ jobs:
             -o android/app/libs/aram.aar \
             ./mobile
 
+
           test -s android/app/libs/aram.aar
+
 
           echo
           echo "=========================================="
-          echo "AAR created"
+          echo "AAR created successfully"
           echo "=========================================="
 
-          ls -lh android/app/libs/aram.aar
+
+          ls -lh \
+            android/app/libs/aram.aar
+
 
       # ==========================================================
       # 17. Inspect AAR
@@ -545,14 +659,17 @@ jobs:
 
           set -eux
 
+
           echo "=========================================="
-          echo "AAR native libraries"
+          echo "Native libraries inside AAR"
           echo "=========================================="
+
 
           unzip -l \
             android/app/libs/aram.aar \
             | grep -E '\.so$' \
             || true
+
 
       # ==========================================================
       # 18. Create BUILD-INFO
@@ -568,31 +685,34 @@ jobs:
 
           set -eux
 
-          mkdir -p android/app/src/main/assets
+
+          mkdir -p \
+            android/app/src/main/assets
+
 
           cat > android/app/src/main/assets/BUILD-INFO.txt <<EOF
-          aram-emu=$(git rev-parse HEAD)
-          aram-core=${ARAM_CORE_COMMIT}
-          aram-frontend=${ARAM_FRONTEND_COMMIT}
-          aram-authd=${ARAM_AUTHD_COMMIT}
-          android-abi=armeabi-v7a
-          build-type=ARM32
-          EOF
+aram-emu=$(git rev-parse HEAD)
+aram-core=${ARAM_CORE_COMMIT}
+aram-frontend=${ARAM_FRONTEND_COMMIT}
+aram-authd=${ARAM_AUTHD_COMMIT}
+android-abi=armeabi-v7a
+build-type=ARM32
+EOF
+
 
           echo "=========================================="
-          echo "BUILD-INFO.txt"
+          echo "BUILD-INFO"
           echo "=========================================="
 
-          cat android/app/src/main/assets/BUILD-INFO.txt
+
+          cat \
+            android/app/src/main/assets/BUILD-INFO.txt
+
 
       # ==========================================================
       # 19. Build ARM32 APK
       #
-      # ARAM Gradle ABI:
-      #
-      # ARAM_ANDROID_ABIS
-      #
-      # 반드시 armeabi-v7a 하나만 사용
+      # ARAM_ANDROID_ABIS를 반드시 armeabi-v7a로 제한.
       # ==========================================================
 
       - name: Build ARM32 APK
@@ -602,7 +722,9 @@ jobs:
         shell: bash
 
         env:
+
           ARAM_VERSION_CODE: ${{ github.run_number }}
+
           ARAM_VERSION_NAME: "arm32-${{ github.sha }}"
 
           ARAM_ANDROID_ABIS: "armeabi-v7a"
@@ -611,17 +733,22 @@ jobs:
 
           set -eux
 
+
           echo "=========================================="
           echo "Building ARM32 APK"
           echo "=========================================="
 
-          echo "ARAM_ANDROID_ABIS=$ARAM_ANDROID_ABIS"
+
+          echo "ARAM_ANDROID_ABIS:"
+          echo "$ARAM_ANDROID_ABIS"
+
 
           gradle \
             --no-daemon \
             --stacktrace \
             -p android \
             :app:assembleGithubDebug
+
 
       # ==========================================================
       # 20. Locate APK
@@ -637,9 +764,11 @@ jobs:
 
           set -eux
 
+
           echo "=========================================="
           echo "APK files"
           echo "=========================================="
+
 
           find \
             android/app/build/outputs/apk \
@@ -647,20 +776,21 @@ jobs:
             -name "*.apk" \
             -print
 
+
       # ==========================================================
-      # 21. Verify APK ABI
+      # 21. Verify ARM32 APK
       #
-      # 반드시:
+      # APK에:
       #
-      # lib/armeabi-v7a/
+      # armeabi-v7a
       #
-      # 만 존재해야 함.
-      #
-      # 다음은 있으면 실패:
+      # 만 존재해야 한다.
       #
       # arm64-v8a
       # x86_64
       # x86
+      #
+      # 가 존재하면 빌드 실패.
       # ==========================================================
 
       - name: Verify ARM32 APK
@@ -673,57 +803,75 @@ jobs:
 
           set -eux
 
+
           APK="$(
-            find android/app/build/outputs/apk \
+            find \
+              android/app/build/outputs/apk \
               -type f \
               -name "*.apk" \
               | head -n 1
           )"
 
+
           if [ -z "$APK" ]; then
+
             echo "ERROR: APK not found."
+
             exit 1
+
           fi
+
 
           echo "APK:"
           echo "$APK"
 
-          rm -rf /tmp/aram-apk-check
 
-          mkdir -p /tmp/aram-apk-check
+          rm -rf \
+            /tmp/aram-apk-check
+
+
+          mkdir -p \
+            /tmp/aram-apk-check
+
 
           unzip -q \
             "$APK" \
             -d /tmp/aram-apk-check
+
 
           echo
           echo "=========================================="
           echo "ABI directories"
           echo "=========================================="
 
-          if [ -d /tmp/aram-apk-check/lib ]; then
 
-            find \
-              /tmp/aram-apk-check/lib \
-              -maxdepth 1 \
-              -mindepth 1 \
-              -type d \
-              -print \
-              | sort
+          if [ ! -d "/tmp/aram-apk-check/lib" ]; then
 
-          else
+            echo "ERROR:"
+            echo "APK has no lib directory."
 
-            echo "ERROR: APK has no lib directory."
             exit 1
 
           fi
 
-          # --------------------------------------------------------
-          # ARM32 존재 확인
-          # --------------------------------------------------------
 
-          if [ ! -d "/tmp/aram-apk-check/lib/armeabi-v7a" ]; then
+          find \
+            /tmp/aram-apk-check/lib \
+            -maxdepth 1 \
+            -mindepth 1 \
+            -type d \
+            -print \
+            | sort
 
+
+          # ------------------------------------------------------
+          # armeabi-v7a 확인
+          # ------------------------------------------------------
+
+          if [ ! -d \
+            "/tmp/aram-apk-check/lib/armeabi-v7a" ]; then
+
+            echo
             echo "ERROR:"
             echo "armeabi-v7a is missing."
 
@@ -731,49 +879,60 @@ jobs:
 
           fi
 
-          # --------------------------------------------------------
-          # ARM64 금지
-          # --------------------------------------------------------
 
-          if [ -d "/tmp/aram-apk-check/lib/arm64-v8a" ]; then
+          # ------------------------------------------------------
+          # arm64-v8a 금지
+          # ------------------------------------------------------
 
+          if [ -d \
+            "/tmp/aram-apk-check/lib/arm64-v8a" ]; then
+
+            echo
             echo "ERROR:"
-            echo "arm64-v8a detected!"
+            echo "arm64-v8a detected."
 
             exit 1
 
           fi
 
-          # --------------------------------------------------------
+
+          # ------------------------------------------------------
           # x86_64 금지
-          # --------------------------------------------------------
+          # ------------------------------------------------------
 
-          if [ -d "/tmp/aram-apk-check/lib/x86_64" ]; then
+          if [ -d \
+            "/tmp/aram-apk-check/lib/x86_64" ]; then
 
+            echo
             echo "ERROR:"
-            echo "x86_64 detected!"
+            echo "x86_64 detected."
 
             exit 1
 
           fi
 
-          # --------------------------------------------------------
+
+          # ------------------------------------------------------
           # x86 금지
-          # --------------------------------------------------------
+          # ------------------------------------------------------
 
-          if [ -d "/tmp/aram-apk-check/lib/x86" ]; then
+          if [ -d \
+            "/tmp/aram-apk-check/lib/x86" ]; then
 
+            echo
             echo "ERROR:"
-            echo "x86 detected!"
+            echo "x86 detected."
 
             exit 1
 
           fi
+
 
           echo
           echo "=========================================="
-          echo "Native libraries"
+          echo "All native libraries"
           echo "=========================================="
+
 
           find \
             /tmp/aram-apk-check/lib \
@@ -782,31 +941,40 @@ jobs:
             -print \
             | sort
 
+
           echo
           echo "=========================================="
           echo "Checking every .so"
           echo "=========================================="
 
+
           SO_COUNT=0
+
 
           while IFS= read -r SO_FILE; do
 
             SO_COUNT=$((SO_COUNT + 1))
 
+
             echo
             echo "------------------------------------------"
+
             echo "Library:"
             echo "$SO_FILE"
+
             echo "------------------------------------------"
 
+
             file "$SO_FILE"
+
 
             if ! file "$SO_FILE" \
               | grep -Eiq "ELF 32-bit.*ARM"; then
 
               echo
               echo "ERROR:"
-              echo "Library is not 32-bit ARM:"
+              echo "This is not an ARM32 library."
+
               echo "$SO_FILE"
 
               exit 1
@@ -814,34 +982,46 @@ jobs:
             fi
 
           done < <(
+
             find \
               /tmp/aram-apk-check/lib/armeabi-v7a \
               -type f \
               -name "*.so" \
               | sort
+
           )
+
 
           if [ "$SO_COUNT" -eq 0 ]; then
 
+            echo
             echo "ERROR:"
-            echo "No native libraries found."
+            echo "No native .so files found."
 
             exit 1
 
           fi
+
 
           echo
           echo "=========================================="
           echo "ARM32 ABI CHECK PASSED"
           echo "=========================================="
 
+
           echo "ABI: armeabi-v7a"
+
           echo "Native library count: $SO_COUNT"
+
           echo "arm64-v8a: NOT PRESENT"
+
           echo "x86_64: NOT PRESENT"
+
           echo "x86: NOT PRESENT"
 
+
           echo "=========================================="
+
 
       # ==========================================================
       # 22. Verify BUILD-INFO inside APK
@@ -857,24 +1037,29 @@ jobs:
 
           set -eux
 
+
           APK="$(
-            find android/app/build/outputs/apk \
+            find \
+              android/app/build/outputs/apk \
               -type f \
               -name "*.apk" \
               | head -n 1
           )"
 
+
           echo "=========================================="
           echo "BUILD-INFO inside APK"
           echo "=========================================="
+
 
           unzip -p \
             "$APK" \
             assets/BUILD-INFO.txt \
             || true
 
+
       # ==========================================================
-      # 23. Rename APK
+      # 23. Prepare final APK
       # ==========================================================
 
       - name: Prepare ARM32 APK
@@ -887,28 +1072,42 @@ jobs:
 
           set -eux
 
+
           mkdir -p dist
 
+
           APK="$(
-            find android/app/build/outputs/apk \
+            find \
+              android/app/build/outputs/apk \
               -type f \
               -name "*.apk" \
               | head -n 1
           )"
 
-          test -n "$APK"
+
+          if [ -z "$APK" ]; then
+
+            echo "ERROR: APK not found."
+
+            exit 1
+
+          fi
+
 
           cp \
             "$APK" \
             dist/aram-android-arm32.apk
 
+
           echo
           echo "=========================================="
-          echo "Final APK"
+          echo "Final ARM32 APK"
           echo "=========================================="
+
 
           ls -lh \
             dist/aram-android-arm32.apk
+
 
       # ==========================================================
       # 24. Upload Artifact
@@ -919,7 +1118,11 @@ jobs:
         uses: actions/upload-artifact@v4
 
         with:
+
           name: aram-android-arm32
+
           path: aram-emu/dist/aram-android-arm32.apk
+
           if-no-files-found: error
+
           retention-days: 30
