@@ -14,7 +14,7 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. Source
+      # 1. ARAM source
       # ============================================================
 
       - name: Checkout ARAM-EMU
@@ -78,4 +78,22 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages
+          packages: ""
+
+
+      # ============================================================
+      # 5. Android SDK / NDK
+      # ============================================================
+
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          set -eux
+
+          echo "=========================================="
+          echo "Android SDK"
+          echo "=========================================="
+
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+
+          echo
