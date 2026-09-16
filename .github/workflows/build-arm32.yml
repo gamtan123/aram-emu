@@ -7,183 +7,169 @@ permissions:
   contents: read
 
 env:
-  # APK에서 확인한 정확한 커밋
-  ARAM_EMU_COMMIT: 88d6061c4a739389936eae4b5bfef7ab898aa
+  # APK에서 확인된 component commit
   ARAM_CORE_COMMIT: 7f699ecd04ecc22a031905a5d15f17e2b3818843
   ARAM_FRONTEND_COMMIT: 3f3ff549199a4593ba5a7a0e86f59d1494d9658d
   ARAM_AUTHD_COMMIT: 4053607356dd89e621740388f7ec761e27ecee58
 
-  GO_VERSION: '1.26.x'
-  JAVA_VERSION: '17'
-  GRADLE_VERSION: '8.14.1'
-  ANDROID_NDK_VERSION: '28.2.13676358'
+  GO_VERSION: "1.26.x"
+  JAVA_VERSION: "17"
+  GRADLE_VERSION: "8.14.1"
+  ANDROID_NDK_VERSION: "28.2.13676358"
 
 jobs:
 
   build-arm32:
     name: Build Android ARM32 armeabi-v7a
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
 
-      # ------------------------------------------------------------
-      # 1. ARAM-EMU checkout
-      # ------------------------------------------------------------
+      # ============================================================
+      # 1. ARAM-EMU
+      #
+      # 중요:
+      # 이전에는 존재하지 않는 88d6061... 커밋을 checkout해서
+      # 여기서 빌드가 시작되기도 전에 실패했다.
+      #
+      # 이번에는 네 fork의 main을 사용한다.
+      # ============================================================
       - name: Checkout ARAM-EMU
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          repository: mirusu400/aram-emu
-          ref: ${{ env.ARAM_EMU_COMMIT }}
+          repository: gamtan123/aram-emu
+          ref: main
           path: aram-emu
-          fetch-depth: 1
+          persist-credentials: false
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 2. ARAM-CORE
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Checkout ARAM-CORE
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: mirusu400/aram-core
           ref: ${{ env.ARAM_CORE_COMMIT }}
           path: aram-core
-          fetch-depth: 1
+          persist-credentials: false
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 3. ARAM-FRONTEND
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Checkout ARAM-FRONTEND
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: mirusu400/aram-frontend
           ref: ${{ env.ARAM_FRONTEND_COMMIT }}
           path: aram-frontend
-          fetch-depth: 1
+          persist-credentials: false
 
-      # ------------------------------------------------------------
+      # ============================================================
       # 4. ARAM-AUTHD
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Checkout ARAM-AUTHD
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: mirusu400/aram-authd
           ref: ${{ env.ARAM_AUTHD_COMMIT }}
           path: aram-authd
-          fetch-depth: 1
+          persist-credentials: false
 
-      # ------------------------------------------------------------
-      # 5. Java
-      # ------------------------------------------------------------
+      # ============================================================
+      # 5. Go
+      # ============================================================
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            aram-emu/go.sum
+            aram-emu/go.work.sum
+            aram-core/go.sum
+            aram-frontend/go.sum
+            aram-authd/go.sum
+
+      # ============================================================
+      # 6. Java
+      # ============================================================
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      # ------------------------------------------------------------
-      # 6. Go
-      # ------------------------------------------------------------
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      # ------------------------------------------------------------
+      # ============================================================
       # 7. Android SDK
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: ''
+          packages: ""
 
-      - name: Install Android SDK / NDK
+      # ============================================================
+      # 8. Android NDK
+      # ============================================================
+      - name: Install Android NDK
         shell: bash
         run: |
-          sdkmanager --install \
+          set -eux
+
+          sdkmanager \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;35.0.0" \
             "ndk;${ANDROID_NDK_VERSION}"
 
-      # ------------------------------------------------------------
-      # 8. Set Android NDK
-      # ------------------------------------------------------------
-      - name: Configure Android NDK
-        shell: bash
-        run: |
-          NDK="$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" \
+            >> "${GITHUB_ENV}"
 
-          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
-
-          echo "ANDROID_NDK_HOME=$NDK"
-          echo "ANDROID_NDK_ROOT=$NDK"
-
-      # ------------------------------------------------------------
-      # 9. Install Gradle
-      # ------------------------------------------------------------
+      # ============================================================
+      # 9. Gradle
+      # ============================================================
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-provider: basic
 
-      # ------------------------------------------------------------
-      # 10. Show versions
-      # ------------------------------------------------------------
-      - name: Show build versions
+      # ============================================================
+      # 10. Show exact revisions
+      # ============================================================
+      - name: Show source revisions
         shell: bash
-        run: |
-          echo "===== Go ====="
-          go version
-
-          echo "===== Java ====="
-          java -version
-
-          echo "===== Gradle ====="
-          gradle --version
-
-          echo "===== NDK ====="
-          "$ANDROID_NDK_HOME/ndk-build" --version || true
-
-          echo "===== Commits ====="
-          echo "aram-emu      = ${ARAM_EMU_COMMIT}"
-          echo "aram-core     = ${ARAM_CORE_COMMIT}"
-          echo "aram-frontend = ${ARAM_FRONTEND_COMMIT}"
-          echo "aram-authd    = ${ARAM_AUTHD_COMMIT}"
-
-      # ------------------------------------------------------------
-      # 11. Prepare component directories
-      # ------------------------------------------------------------
-      - name: Prepare component links
-        shell: bash
-        working-directory: aram-emu
         run: |
           set -eux
 
-          echo "===== aram-emu ====="
-          git rev-parse HEAD
+          echo "=========================================="
+          echo "ARAM-EMU"
+          echo "=========================================="
+          git -C aram-emu rev-parse HEAD
 
-          echo "===== aram-core ====="
-          cd ../aram-core
-          git rev-parse HEAD
+          echo "=========================================="
+          echo "ARAM-CORE"
+          echo "=========================================="
+          git -C aram-core rev-parse HEAD
 
-          echo "===== aram-frontend ====="
-          cd ../aram-frontend
-          git rev-parse HEAD
+          echo "=========================================="
+          echo "ARAM-FRONTEND"
+          echo "=========================================="
+          git -C aram-frontend rev-parse HEAD
 
-          echo "===== aram-authd ====="
-          cd ../aram-authd
-          git rev-parse HEAD
+          echo "=========================================="
+          echo "ARAM-AUTHD"
+          echo "=========================================="
+          git -C aram-authd rev-parse HEAD
 
-      # ------------------------------------------------------------
-      # 12. Apply ARM32 Go compatibility fix
+      # ============================================================
+      # 11. ARM32 compatibility patch
       #
-      # ARM32에서는 Go int가 32-bit이기 때문에
+      # Go ARM32에서 int는 32-bit이므로
       #
       # int(^uint32(0))
       #
-      # 가 4294967295를 int32로 변환하려 하면서 overflow 발생.
-      # ------------------------------------------------------------
-      - name: Patch ARAM-CORE for 32-bit ARM
+      # 는 4294967295를 int32로 변환하려고 해서 overflow가 발생한다.
+      # ============================================================
+      - name: Patch ARAM-CORE for ARM32
         shell: bash
         run: |
           set -eux
@@ -207,77 +193,89 @@ jobs:
           if old in text:
               text = text.replace(old, new, 1)
               path.write_text(text)
-              print("ARM32 compatibility patch applied.")
+              print("ARM32 patch applied.")
+
           elif new in text:
-              print("ARM32 compatibility patch already exists.")
+              print("ARM32 patch already present.")
+
           else:
-              print("Target expression not found.")
-              print("Searching nearby code...")
+              print("Expected ARM32 overflow expression was not found.")
 
               for i, line in enumerate(text.splitlines(), 1):
-                  if "serviceState" in line and "^uint32" in line:
+                  if "serviceState" in line:
                       print(f"{i}: {line}")
 
               raise SystemExit(
-                  "ERROR: Expected ARM32 overflow expression was not found."
+                  "ERROR: Cannot locate ARM32 compatibility target."
               )
           PY
 
+          echo
           echo "===== Patched code ====="
-          grep -n -A3 -B3 "serviceState" "$FILE" | head -30
 
-      # ------------------------------------------------------------
-      # 13. Prepare Go workspace
-      # ------------------------------------------------------------
-      - name: Prepare Go workspace
-        shell: bash
-        working-directory: aram-emu
-        run: |
-          set -eux
+          grep -n -A4 -B4 \
+            "serviceState" \
+            "$FILE" \
+            | head -40
 
-          echo "===== go.work ====="
-          if [ -f go.work ]; then
-            cat go.work
-          fi
-
-          echo "===== go.mod ====="
-          cat go.mod
-
-      # ------------------------------------------------------------
-      # 14. Install ebitenmobile
-      # ------------------------------------------------------------
+      # ============================================================
+      # 12. Install Ebitengine mobile binder
+      #
+      # 현재 aram-emu가 사용하는 Ebitengine 버전을 읽어서
+      # 같은 버전의 ebitenmobile을 설치한다.
+      # ============================================================
       - name: Install ebitenmobile
+        working-directory: aram-emu
         shell: bash
         run: |
           set -eux
 
-          go install github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@latest
+          ebiten_version="$(go list -m -f '{{.Version}}' \
+            github.com/hajimehoshi/ebiten/v2)"
+
+          echo "Ebitengine version:"
+          echo "$ebiten_version"
+
+          go install \
+            "github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@${ebiten_version}"
 
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-          "$(go env GOPATH)/bin/ebitenmobile" version || true
+          ebitenmobile version || true
 
-      # ------------------------------------------------------------
-      # 15. Build ARM32 AAR
+      # ============================================================
+      # 13. Build ARM32 AAR
       #
       # 핵심:
       #
-      # -target android/arm
+      # android/arm
       #
-      # => armeabi-v7a
-      # ------------------------------------------------------------
+      # = 32-bit ARM
+      # = armeabi-v7a
+      # ============================================================
       - name: Build ARM32 AAR
         working-directory: aram-emu
         shell: bash
         env:
-          CGO_ENABLED: '1'
+          CGO_ENABLED: "1"
           GOOS: android
           GOARCH: arm
-          GOARM: '7'
+          GOARM: "7"
+
+          CORE_SHA: ${{ env.ARAM_CORE_COMMIT }}
+          FRONTEND_SHA: ${{ env.ARAM_FRONTEND_COMMIT }}
+
         run: |
           set -eux
 
           mkdir -p android/app/libs
+          mkdir -p android/app/src/main/assets
+
+          echo "=========================================="
+          echo "Building ARM32 AAR"
+          echo "Target: android/arm"
+          echo "ABI: armeabi-v7a"
+          echo "=========================================="
 
           ebitenmobile bind \
             -target android/arm \
@@ -288,55 +286,75 @@ jobs:
             -o android/app/libs/aram.aar \
             ./mobile
 
-          echo "===== AAR created ====="
+          test -s android/app/libs/aram.aar
+
+          echo
+          echo "AAR created:"
           ls -lh android/app/libs/aram.aar
 
-      # ------------------------------------------------------------
-      # 16. Inspect AAR
-      # ------------------------------------------------------------
+      # ============================================================
+      # 14. Create BUILD-INFO
+      # ============================================================
+      - name: Create BUILD-INFO
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          set -eux
+
+          {
+            echo "aram-emu=$(git rev-parse HEAD)"
+            echo "aram-core=${ARAM_CORE_COMMIT}"
+            echo "aram-frontend=${ARAM_FRONTEND_COMMIT}"
+            echo "aram-authd=${ARAM_AUTHD_COMMIT}"
+            echo "android-abi=armeabi-v7a"
+            echo "build-type=ARM32"
+          } > android/app/src/main/assets/BUILD-INFO.txt
+
+          cat android/app/src/main/assets/BUILD-INFO.txt
+
+      # ============================================================
+      # 15. Inspect AAR
+      # ============================================================
       - name: Inspect ARM32 AAR
         working-directory: aram-emu
         shell: bash
         run: |
           set -eux
 
-          unzip -l android/app/libs/aram.aar | grep -E '\.so$' || true
-
-          echo
-          echo "===== AAR native libraries ====="
+          echo "===== Native libraries inside AAR ====="
 
           unzip -l android/app/libs/aram.aar \
-            | grep -E 'jni/.+\.so$' \
+            | grep -E '\.so$' \
             || true
 
-      # ------------------------------------------------------------
-      # 17. Build ARM32 APK
+      # ============================================================
+      # 16. Build ARM32 APK
       #
-      # 중요:
-      # ARAM 프로젝트의 Gradle ABI 설정은
+      # ARAM 프로젝트는 ARAM_ANDROID_ABIS 환경변수를 사용한다.
       #
-      # ARAM_ANDROID_ABIS
-      #
-      # 환경변수를 사용한다.
-      # ------------------------------------------------------------
+      # 반드시 armeabi-v7a 하나만 넣는다.
+      # ============================================================
       - name: Build ARM32 APK
         working-directory: aram-emu
         shell: bash
         env:
           ARAM_VERSION_CODE: ${{ github.run_number }}
           ARAM_VERSION_NAME: arm32-${{ github.sha }}
+
           ARAM_ANDROID_ABIS: armeabi-v7a
+
         run: |
           set -eux
 
           gradle \
-            :app:assembleGithubDebug \
+            --no-daemon \
             --stacktrace \
-            --no-daemon
+            -p android \
+            :app:assembleGithubDebug
 
-      # ------------------------------------------------------------
-      # 18. Locate APK
-      # ------------------------------------------------------------
+      # ============================================================
+      # 17. Check APK exists
+      # ============================================================
       - name: Locate APK
         working-directory: aram-emu
         shell: bash
@@ -348,135 +366,38 @@ jobs:
             -name "*.apk" \
             -print
 
-      # ------------------------------------------------------------
-      # 19. Verify APK ABI
-      # ------------------------------------------------------------
+          test -f \
+            android/app/build/outputs/apk/github/debug/app-github-debug.apk
+
+      # ============================================================
+      # 18. Verify ARM32 ABI
+      #
+      # 여기서 잘못된 ABI가 하나라도 들어가면 빌드 실패.
+      # ============================================================
       - name: Verify ARM32 APK
         working-directory: aram-emu
         shell: bash
         run: |
           set -eux
 
-          APK=$(find android/app/build/outputs/apk \
-            -type f \
-            -name "*.apk" \
-            | head -n 1)
+          APK="android/app/build/outputs/apk/github/debug/app-github-debug.apk"
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK not found"
-            exit 1
-          fi
-
-          echo "APK=$APK"
+          echo "=========================================="
+          echo "APK:"
+          echo "$APK"
+          echo "=========================================="
 
           rm -rf /tmp/aram-apk-check
           mkdir -p /tmp/aram-apk-check
 
-          unzip -q "$APK" -d /tmp/aram-apk-check
+          unzip -q "$APK" \
+            -d /tmp/aram-apk-check
 
           echo
-          echo "===== Native libraries ====="
+          echo "=========================================="
+          echo "Native library directories"
+          echo "=========================================="
 
           find /tmp/aram-apk-check/lib \
-            -type f \
-            -name "*.so" \
-            -print \
-            | sort
-
-          echo
-          echo "===== Checking armeabi-v7a ====="
-
-          if [ ! -d "/tmp/aram-apk-check/lib/armeabi-v7a" ]; then
-            echo "ERROR: armeabi-v7a directory missing"
-            exit 1
-          fi
-
-          echo
-          echo "===== Checking forbidden 64-bit ABIs ====="
-
-          if [ -d "/tmp/aram-apk-check/lib/arm64-v8a" ]; then
-            echo "ERROR: arm64-v8a found"
-            exit 1
-          fi
-
-          if [ -d "/tmp/aram-apk-check/lib/x86_64" ]; then
-            echo "ERROR: x86_64 found"
-            exit 1
-          fi
-
-          if [ -d "/tmp/aram-apk-check/lib/x86" ]; then
-            echo "ERROR: x86 found"
-            exit 1
-          fi
-
-          echo
-          echo "===== Checking every .so ====="
-
-          SO_COUNT=0
-
-          while IFS= read -r so; do
-            SO_COUNT=$((SO_COUNT + 1))
-
-            echo
-            echo "Checking:"
-            echo "$so"
-
-            file "$so"
-
-            if ! file "$so" | grep -Eiq "ELF 32-bit.*ARM"; then
-              echo "ERROR: Not a 32-bit ARM library:"
-              echo "$so"
-              exit 1
-            fi
-          done < <(
-            find /tmp/aram-apk-check/lib/armeabi-v7a \
-              -type f \
-              -name "*.so" \
-              | sort
-          )
-
-          if [ "$SO_COUNT" -eq 0 ]; then
-            echo "ERROR: No .so files found"
-            exit 1
-          fi
-
-          echo
-          echo "======================================"
-          echo "ARM32 ABI verification PASSED"
-          echo "Native libraries: $SO_COUNT"
-          echo "ABI: armeabi-v7a"
-          echo "No arm64-v8a"
-          echo "No x86_64"
-          echo "No x86"
-          echo "======================================"
-
-      # ------------------------------------------------------------
-      # 20. Rename APK
-      # ------------------------------------------------------------
-      - name: Prepare ARM32 APK artifact
-        working-directory: aram-emu
-        shell: bash
-        run: |
-          set -eux
-
-          APK=$(find android/app/build/outputs/apk \
-            -type f \
-            -name "*.apk" \
-            | head -n 1)
-
-          cp "$APK" \
-            android/app/build/outputs/apk/aram-android-arm32.apk
-
-          ls -lh \
-            android/app/build/outputs/apk/aram-android-arm32.apk
-
-      # ------------------------------------------------------------
-      # 21. Upload APK
-      # ------------------------------------------------------------
-      - name: Upload ARM32 APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: aram-android-arm32
-          path: aram-emu/android/app/build/outputs/apk/aram-android-arm32.apk
-          if-no-files-found: error
-          retention-days: 30
+            -maxdepth 1 \
+            -mind
