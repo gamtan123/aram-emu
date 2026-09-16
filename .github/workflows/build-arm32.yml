@@ -153,7 +153,7 @@ jobs:
 
 
       # ==========================================
-      # ARM32 32-bit 호환성 패치
+      # GO 32-BIT COMPATIBILITY PATCH
       # ==========================================
       - name: Patch Go 32-bit compatibility
         working-directory: aram-core
@@ -202,7 +202,7 @@ jobs:
 
 
       # ==========================================
-      # ARM32 AAR BUILD
+      # BUILD ARM32 AAR
       # ==========================================
       - name: Build ARM32 AAR
         working-directory: aram-emu
@@ -232,9 +232,7 @@ jobs:
 
           emu_short="${GITHUB_SHA::7}"
           core_short="${CORE_SHA::7}"
-          frontend_short="${{ needs.resolve-components.outputs.frontend_sha }}"
-
-          frontend_short="${frontend_short::7}"
+          frontend_short="${FRONTEND_SHA::7}"
 
           build_version="ARM32-${emu_short}-c${core_short}-f${frontend_short}"
 
@@ -268,7 +266,6 @@ jobs:
 
           if unzip -Z1 android/app/libs/aram.aar | \
             grep -E "jni/(arm64-v8a|x86_64|x86)/libgojni.so"; then
-
             echo "ERROR: ARM64/x86 native library detected."
             exit 1
           fi
@@ -286,93 +283,25 @@ jobs:
 
 
       # ==========================================
-      # FORCE ARM32 ABI
-      # ==========================================
-      - name: Force Android ARM32 ABI
-        working-directory: aram-emu
-        shell: bash
-        run: |
-          echo "Searching Android Gradle files..."
-
-          find android -type f \
-            \( -name "build.gradle" -o -name "build.gradle.kts" \) \
-            -print
-
-          echo ""
-          echo "Current ABI configuration:"
-
-          grep -Rni "abiFilters" android || true
-          grep -Rni "arm64-v8a" android || true
-          grep -Rni "x86_64" android || true
-
-          echo ""
-          echo "Patching ABI configuration..."
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          files = (
-              list(Path("android").rglob("build.gradle"))
-              + list(Path("android").rglob("build.gradle.kts"))
-          )
-
-          if not files:
-              raise SystemExit("No Android Gradle build file found.")
-
-          for path in files:
-              text = path.read_text()
-              original = text
-
-              replacements = [
-                  (
-                      'listOf("arm64-v8a", "x86_64")',
-                      'listOf("armeabi-v7a")'
-                  ),
-                  (
-                      'listOf("arm64-v8a","x86_64")',
-                      'listOf("armeabi-v7a")'
-                  ),
-                  (
-                      '"arm64-v8a", "x86_64"',
-                      '"armeabi-v7a"'
-                  ),
-                  (
-                      '"arm64-v8a","x86_64"',
-                      '"armeabi-v7a"'
-                  ),
-                  (
-                      "'arm64-v8a', 'x86_64'",
-                      "'armeabi-v7a'"
-                  ),
-              ]
-
-              for old, new in replacements:
-                  text = text.replace(old, new)
-
-              if text != original:
-                  path.write_text(text)
-                  print(f"PATCHED: {path}")
-              else:
-                  print(f"NO CHANGE: {path}")
-
-          PY
-
-          echo ""
-          echo "Final ARM32 configuration:"
-
-          grep -Rni "armeabi-v7a" android || true
-
-
-      # ==========================================
-      # BUILD APK
+      # BUILD ARM32 APK
       # ==========================================
       - name: Build ARM32 APK
         working-directory: aram-emu
         shell: bash
+        env:
+          ARAM_VERSION_CODE: ${{ github.run_number }}
+          ARAM_VERSION_NAME: ${{ github.sha }}
+
+          # 핵심: ARM32만 APK에 포함
+          ARAM_ANDROID_ABIS: armeabi-v7a
+
         run: |
           echo "======================================"
           echo " BUILDING ARM32 APK"
           echo "======================================"
+
+          echo ""
+          echo "ARAM_ANDROID_ABIS=${ARAM_ANDROID_ABIS}"
 
           gradle --no-daemon --stacktrace -p android \
             :app:assembleGithubDebug
@@ -404,7 +333,7 @@ jobs:
 
 
       # ==========================================
-      # VERIFY APK
+      # VERIFY ARM32 APK
       # ==========================================
       - name: Verify ARM32 APK
         working-directory: aram-emu
@@ -469,7 +398,7 @@ jobs:
 
 
       # ==========================================
-      # UPLOAD
+      # UPLOAD APK
       # ==========================================
       - name: Upload ARM32 APK
         uses: actions/upload-artifact@v7
