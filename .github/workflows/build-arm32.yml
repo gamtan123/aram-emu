@@ -72,17 +72,22 @@ jobs:
 
 
       # ============================================================
-      # 4. Android SDK / NDK
+      # 4. Android SDK
       #
-      # IMPORTANT:
-      # Do NOT use android-actions/setup-android here.
-      # It previously tried to install the obsolete "tools"
-      # package and caused:
+      # packages: "" is IMPORTANT.
       #
-      # Warning: Failed to find package 'tools'
-      #
-      # The GitHub runner already contains Android SDK tools.
-      # We install only the required packages with sdkmanager.
+      # This prevents setup-android from trying to install
+      # the obsolete "tools" package.
+      # ============================================================
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ""
+
+
+      # ============================================================
+      # 5. Install required Android packages
       # ============================================================
 
       - name: Install Android SDK and NDK
@@ -96,11 +101,17 @@ jobs:
 
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
+          echo
+          echo "sdkmanager:"
+          which sdkmanager
+
+          echo
+          echo "sdkmanager version:"
           sdkmanager --version
 
           echo
           echo "=========================================="
-          echo "Accept Android licenses"
+          echo "Android licenses"
           echo "=========================================="
 
           yes | sdkmanager --licenses || true
@@ -118,7 +129,7 @@ jobs:
 
 
       # ============================================================
-      # 5. NDK environment
+      # 6. Configure NDK
       # ============================================================
 
       - name: Configure Android NDK
@@ -134,14 +145,14 @@ jobs:
           echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
           echo "=========================================="
-          echo "NDK"
+          echo "Android NDK"
           echo "=========================================="
 
           echo "$NDK"
 
 
       # ============================================================
-      # 6. Gradle
+      # 7. Gradle
       # ============================================================
 
       - name: Setup Gradle
@@ -151,7 +162,7 @@ jobs:
 
 
       # ============================================================
-      # 7. Show build environment
+      # 8. Show environment
       # ============================================================
 
       - name: Show build environment
@@ -184,7 +195,7 @@ jobs:
           echo "Android SDK"
           echo "=========================================="
 
-          sdkmanager --version
+          echo "$ANDROID_SDK_ROOT"
 
           echo
           echo "=========================================="
@@ -215,14 +226,7 @@ jobs:
 
 
       # ============================================================
-      # 8. ARM32 compatibility patch
-      #
-      # Go int is 32-bit on ARM32.
-      #
-      # Previous ARM32 build failed with:
-      #
-      # constant 4294967295 overflows int
-      #
+      # 9. ARM32 compatibility patch
       # ============================================================
 
       - name: Patch ARAM-CORE for ARM32
@@ -270,23 +274,12 @@ jobs:
 
 
       # ============================================================
-      # 9. ARM32 compiler
+      # 10. Configure ARM32 Clang
       #
-      # IMPORTANT:
-      # We DO NOT set:
+      # DO NOT set GOARCH=arm or GOARM=7.
       #
-      # GOARCH=arm
-      # GOARM=7
-      #
-      # globally.
-      #
-      # Doing so caused ebitenmobile/gomobile itself to be
-      # compiled as ARM32 and produced:
-      #
-      # exec format error
-      #
-      # Instead the Android compiler target is explicitly set
-      # through clang.
+      # ARM32 is selected by the Android clang target and
+      # ebitenmobile -target android/arm.
       # ============================================================
 
       - name: Configure ARM32 Clang
@@ -335,7 +328,7 @@ jobs:
 
 
       # ============================================================
-      # 10. Test ARM32 compiler
+      # 11. Test ARM32 compiler
       # ============================================================
 
       - name: Test ARM32 compiler
@@ -365,7 +358,7 @@ jobs:
 
 
       # ============================================================
-      # 11. Install ebitenmobile
+      # 12. Install ebitenmobile
       # ============================================================
 
       - name: Install ebitenmobile
@@ -393,15 +386,16 @@ jobs:
 
 
       # ============================================================
-      # 12. Build ARM32 AAR
+      # 13. Build ARM32 AAR
       #
       # IMPORTANT:
-      # No GOARCH / GOARM / GOOS here.
+      # No GOARCH
+      # No GOARM
+      # No GOOS
       #
-      # The target is selected by:
+      # Otherwise gomobile itself can become ARM32 and produce:
       #
-      # -target android/arm
-      #
+      # exec format error
       # ============================================================
 
       - name: Build ARM32 AAR
@@ -434,10 +428,6 @@ jobs:
           echo "Android target:"
           echo "android/arm"
 
-          echo
-          echo "ABI:"
-          echo "armeabi-v7a"
-
 
           ebitenmobile bind \
             -target android/arm \
@@ -460,10 +450,10 @@ jobs:
 
 
       # ============================================================
-      # 13. Show AAR native libraries
+      # 14. Inspect AAR
       # ============================================================
 
-      - name: Inspect AAR
+      - name: Inspect ARM32 AAR
         working-directory: aram-emu
         shell: bash
         run: |
@@ -478,7 +468,7 @@ jobs:
 
 
       # ============================================================
-      # 14. Build ARM32 APK
+      # 15. Build ARM32 APK
       # ============================================================
 
       - name: Build ARM32 APK
@@ -505,7 +495,7 @@ jobs:
 
 
       # ============================================================
-      # 15. Verify APK exists
+      # 16. Locate APK
       # ============================================================
 
       - name: Locate APK
@@ -526,19 +516,7 @@ jobs:
 
 
       # ============================================================
-      # 16. VERY IMPORTANT ABI verification
-      #
-      # Must contain:
-      #
-      # lib/armeabi-v7a/
-      #
-      # Must NOT contain:
-      #
-      # lib/arm64-v8a/
-      # lib/x86_64/
-      # lib/x86/
-      #
-      # Every .so is also checked as ELF32 ARM.
+      # 17. Verify ARM32 only
       # ============================================================
 
       - name: Verify ARM32 APK
@@ -553,7 +531,7 @@ jobs:
               -type f \
               -name "*.apk" \
               | head -n 1
-          )"
+          )
 
 
           if [ -z "$APK" ]; then
@@ -581,21 +559,23 @@ jobs:
           echo "ABI directories"
           echo "=========================================="
 
-          if [ -d "/tmp/aram-apk/lib" ]; then
-            find \
-              /tmp/aram-apk/lib \
-              -mindepth 1 \
-              -maxdepth 1 \
-              -type d \
-              -print \
-              | sort
-          else
+
+          if [ ! -d "/tmp/aram-apk/lib" ]; then
             echo "ERROR: lib directory missing."
             exit 1
           fi
 
 
-          # ARM32 반드시 존재
+          find \
+            /tmp/aram-apk/lib \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -print \
+            | sort
+
+
+          # ARM32 MUST exist
 
           if [ ! -d "/tmp/aram-apk/lib/armeabi-v7a" ]; then
             echo
@@ -605,7 +585,7 @@ jobs:
           fi
 
 
-          # ARM64 금지
+          # ARM64 MUST NOT exist
 
           if [ -d "/tmp/aram-apk/lib/arm64-v8a" ]; then
             echo
@@ -615,7 +595,7 @@ jobs:
           fi
 
 
-          # x86_64 금지
+          # x86_64 MUST NOT exist
 
           if [ -d "/tmp/aram-apk/lib/x86_64" ]; then
             echo
@@ -625,7 +605,7 @@ jobs:
           fi
 
 
-          # x86 금지
+          # x86 MUST NOT exist
 
           if [ -d "/tmp/aram-apk/lib/x86" ]; then
             echo
@@ -693,7 +673,6 @@ jobs:
             echo
             echo "ERROR:"
             echo "No native .so files found."
-
             exit 1
           fi
 
@@ -709,7 +688,7 @@ jobs:
           echo "x86         : NOT PRESENT"
 
           echo
-          echo "Native libraries:"
+          echo "Native library count:"
           echo "$SO_COUNT"
 
           echo
@@ -717,7 +696,7 @@ jobs:
 
 
       # ============================================================
-      # 17. Rename APK
+      # 18. Prepare APK
       # ============================================================
 
       - name: Prepare APK
@@ -758,7 +737,7 @@ jobs:
 
 
       # ============================================================
-      # 18. Upload APK
+      # 19. Upload APK
       # ============================================================
 
       - name: Upload ARM32 APK
