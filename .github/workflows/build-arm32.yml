@@ -1,0 +1,405 @@
+name: Build ARAM ARM32
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-components:
+    name: Resolve product components
+    runs-on: ubuntu-latest
+
+    outputs:
+      core_sha: ${{ steps.revisions.outputs.core_sha }}
+      frontend_sha: ${{ steps.revisions.outputs.frontend_sha }}
+      authd_sha: ${{ steps.revisions.outputs.authd_sha }}
+
+    steps:
+      - name: Check out product
+        uses: actions/checkout@v6
+        with:
+          path: aram-emu
+          persist-credentials: false
+
+      - name: Read component versions
+        id: requested
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          core_ref="$(jq -r '.core' product-components.json)"
+          frontend_ref="$(jq -r '.frontend' product-components.json)"
+          authd_ref="$(jq -r '.authd' product-components.json)"
+
+          test -n "${core_ref}"
+          test "${core_ref}" != "null"
+
+          test -n "${frontend_ref}"
+          test "${frontend_ref}" != "null"
+
+          test -n "${authd_ref}"
+          test "${authd_ref}" != "null"
+
+          echo "core_ref=${core_ref}" >> "${GITHUB_OUTPUT}"
+          echo "frontend_ref=${frontend_ref}" >> "${GITHUB_OUTPUT}"
+          echo "authd_ref=${authd_ref}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out aram-core
+        uses: actions/checkout@v6
+        with:
+          repository: mirusu400/aram-core
+          ref: ${{ steps.requested.outputs.core_ref }}
+          path: aram-core
+          persist-credentials: false
+
+      - name: Check out aram-frontend
+        uses: actions/checkout@v6
+        with:
+          repository: mirusu400/aram-frontend
+          ref: ${{ steps.requested.outputs.frontend_ref }}
+          path: aram-frontend
+          persist-credentials: false
+
+      - name: Check out aram-authd
+        uses: actions/checkout@v6
+        with:
+          repository: mirusu400/aram-authd
+          ref: ${{ steps.requested.outputs.authd_ref }}
+          path: aram-authd
+          persist-credentials: false
+
+      - name: Record exact revisions
+        id: revisions
+        shell: bash
+        run: |
+          echo "core_sha=$(git -C aram-core rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+          echo "frontend_sha=$(git -C aram-frontend rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+          echo "authd_sha=$(git -C aram-authd rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+
+  android-arm32:
+    name: Android ARM32 (armeabi-v7a)
+
+    needs:
+      - resolve-components
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out product
+        uses: actions/checkout@v6
+        with:
+          path: aram-emu
+          persist-credentials: false
+
+      - name: Check out aram-core
+        uses: actions/checkout@v6
+        with:
+          repository: mirusu400/aram-core
+          ref: ${{ needs.resolve-components.outputs.core_sha }}
+          path: aram-core
+          persist-credentials: false
+
+      - name: Check out aram-frontend
+        uses: actions/checkout@v6
+        with:
+          repository: mirusu400/aram-frontend
+          ref: ${{ needs.resolve-components.outputs.frontend_sha }}
+          path: aram-frontend
+          persist-credentials: false
+
+      - name: Check out aram-authd
+        uses: actions/checkout@v6
+        with:
+          repository: mirusu400/aram-authd
+          ref: ${{ needs.resolve-components.outputs.authd_sha }}
+          path: aram-authd
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: |
+            aram-emu/go.sum
+            aram-emu/go.work.sum
+            aram-core/go.sum
+            aram-frontend/go.sum
+            aram-authd/go.sum
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.14.1"
+          cache-provider: basic
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          sdkmanager="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+
+          test -x "${sdkmanager}"
+
+          "${sdkmanager}" "ndk;28.2.13676358"
+
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/28.2.13676358" >> "${GITHUB_ENV}"
+
+      - name: Build ARM32 AAR
+        working-directory: aram-emu
+        shell: bash
+        env:
+          CORE_SHA: ${{ needs.resolve-components.outputs.core_sha }}
+          FRONTEND_SHA: ${{ needs.resolve-components.outputs.frontend_sha }}
+          ARAM_POSTHOG_API_KEY: ${{ secrets.ARAM_POSTHOG_API_KEY }}
+
+        run: |
+          echo "======================================"
+          echo " ARAM ARM32 BUILD"
+          echo " Target: android/arm"
+          echo " ABI: armeabi-v7a"
+          echo "======================================"
+
+          ebiten_version="$(go list -m -f '{{.Version}}' \
+            github.com/hajimehoshi/ebiten/v2)"
+
+          echo "Ebitengine version: ${ebiten_version}"
+
+          go install \
+            "github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@${ebiten_version}"
+
+          mkdir -p android/app/libs
+          mkdir -p android/app/src/main/assets
+
+          emu_short="${GITHUB_SHA::7}"
+          core_short="${CORE_SHA::7}"
+          frontend_short="${FRONTEND_SHA::7}"
+
+          build_version="ARM32-${emu_short}-c${core_short}-f${frontend_short}"
+
+          ebitenmobile bind \
+            -target android/arm \
+            -androidapi 23 \
+            -trimpath \
+            -ldflags="-s -w -X=github.com/mirusu400/aram-frontend/frontend.BuildVersion=${build_version} -X=github.com/mirusu400/aram-frontend/frontend.AnalyticsAPIKey=${ARAM_POSTHOG_API_KEY}" \
+            -javapkg io.github.mirusu400.aram \
+            -o android/app/libs/aram.aar \
+            ./mobile
+
+          test -f android/app/libs/aram.aar
+
+          echo ""
+          echo "AAR native libraries:"
+          unzip -Z1 android/app/libs/aram.aar | grep "jni/.*libgojni.so"
+
+          echo ""
+          echo "Checking ARM32 library..."
+
+          unzip -Z1 android/app/libs/aram.aar | \
+            grep -F "jni/armeabi-v7a/libgojni.so"
+
+          echo ""
+          echo "Checking for unwanted ARM64/x86 libraries..."
+
+          if unzip -Z1 android/app/libs/aram.aar | \
+            grep -E "jni/(arm64-v8a|x86_64)/libgojni.so"; then
+            echo "ERROR: ARM64 or x86_64 library detected."
+            exit 1
+          fi
+
+          echo "ARM32 AAR check passed."
+
+          {
+            echo "aram-emu=${GITHUB_SHA}"
+            echo "aram-core=${CORE_SHA}"
+            echo "aram-frontend=${{ needs.resolve-components.outputs.frontend_sha }}"
+            echo "aram-authd=${{ needs.resolve-components.outputs.authd_sha }}"
+            echo "target=android/arm"
+            echo "abi=armeabi-v7a"
+          } > android/app/src/main/assets/BUILD-INFO.txt
+
+
+      - name: Force Android ARM32 ABI
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          echo "Searching Android Gradle files..."
+
+          find android -type f \
+            \( -name "build.gradle" -o -name "build.gradle.kts" \) \
+            -print
+
+          echo ""
+          echo "Searching ABI configuration..."
+
+          grep -Rni "abiFilters" android || true
+          grep -Rni "arm64-v8a" android || true
+          grep -Rni "x86_64" android || true
+
+          echo ""
+          echo "Patching ABI configuration..."
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          files = list(Path("android").rglob("build.gradle")) + \
+                  list(Path("android").rglob("build.gradle.kts"))
+
+          if not files:
+              raise SystemExit("No Android Gradle build file found.")
+
+          patched = False
+
+          for path in files:
+              text = path.read_text()
+
+              original = text
+
+              replacements = [
+                  (
+                      'listOf("arm64-v8a", "x86_64")',
+                      'listOf("armeabi-v7a")'
+                  ),
+                  (
+                      'listOf("arm64-v8a","x86_64")',
+                      'listOf("armeabi-v7a")'
+                  ),
+                  (
+                      '"arm64-v8a", "x86_64"',
+                      '"armeabi-v7a"'
+                  ),
+                  (
+                      '"arm64-v8a","x86_64"',
+                      '"armeabi-v7a"'
+                  ),
+                  (
+                      "'arm64-v8a', 'x86_64'",
+                      "'armeabi-v7a'"
+                  ),
+              ]
+
+              for old, new in replacements:
+                  text = text.replace(old, new)
+
+              if text != original:
+                  path.write_text(text)
+                  print(f"PATCHED: {path}")
+                  patched = True
+              else:
+                  print(f"NO CHANGE: {path}")
+
+          if not patched:
+              print("No ABI text was changed.")
+              print("The build will still be checked after Gradle.")
+          PY
+
+          echo ""
+          echo "Final ABI configuration:"
+          grep -Rni "abiFilters" android || true
+          grep -Rni "armeabi-v7a" android || true
+
+
+      - name: Build ARM32 APK
+        working-directory: aram-emu
+        shell: bash
+        env:
+          ARAM_VERSION_CODE: ${{ github.run_number }}
+          ARAM_VERSION_NAME: ${{ github.sha }}
+
+        run: |
+          echo "======================================"
+          echo " BUILDING ARM32 APK"
+          echo "======================================"
+
+          gradle --no-daemon --stacktrace -p android \
+            :app:assembleGithubDebug
+
+          apk="android/app/build/outputs/apk/github/debug/app-github-debug.apk"
+
+          if [ ! -f "${apk}" ]; then
+            echo "Expected APK was not found."
+            echo ""
+            echo "Available APK files:"
+            find android/app/build/outputs -type f -name "*.apk" -print
+            exit 1
+          fi
+
+          mkdir -p dist
+
+          cp "${apk}" dist/aram-android-arm32.apk
+
+          echo ""
+          echo "ARM32 APK created:"
+          ls -lh dist/aram-android-arm32.apk
+
+
+      - name: Verify ARM32 APK
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          apk="dist/aram-android-arm32.apk"
+
+          echo "======================================"
+          echo " VERIFYING ARM32 APK"
+          echo "======================================"
+
+          test -f "${apk}"
+
+          echo ""
+          echo "Native libraries in APK:"
+          unzip -Z1 "${apk}" | grep '/lib.*\.so$' || true
+
+          echo ""
+          echo "Checking armeabi-v7a..."
+
+          unzip -Z1 "${apk}" | \
+            grep -F "lib/armeabi-v7a/libgojni.so"
+
+          echo ""
+          echo "Checking that ARM64/x86_64 are absent..."
+
+          if unzip -Z1 "${apk}" | \
+            grep -E "lib/(arm64-v8a|x86_64)/libgojni.so"; then
+
+            echo "ERROR: ARM64/x86_64 library is present."
+            exit 1
+          fi
+
+          echo ""
+          echo "Checking ELF architecture..."
+
+          native_library="$(mktemp)"
+
+          unzip -p "${apk}" \
+            "lib/armeabi-v7a/libgojni.so" \
+            > "${native_library}"
+
+          file "${native_library}"
+
+          readelf -h "${native_library}" | \
+            grep -E "Class:|Machine:"
+
+          readelf -h "${native_library}" | \
+            grep -E "Machine:.*ARM"
+
+          rm -f "${native_library}"
+
+          echo ""
+          echo "======================================"
+          echo " ARM32 APK VERIFICATION PASSED"
+          echo "======================================"
+
+
+      - name: Upload ARM32 APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: aram-android-arm32
+          path: aram-emu/dist/aram-android-arm32.apk
+          if-no-files-found: error
+          retention-days: 14
