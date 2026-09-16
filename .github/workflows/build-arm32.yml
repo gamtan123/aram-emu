@@ -74,10 +74,7 @@ jobs:
       # ============================================================
       # 4. Android SDK
       #
-      # packages: "" is IMPORTANT.
-      #
-      # This prevents setup-android from trying to install
-      # the obsolete "tools" package.
+      # packages: "" prevents the obsolete "tools" package error.
       # ============================================================
 
       - name: Setup Android SDK
@@ -87,7 +84,7 @@ jobs:
 
 
       # ============================================================
-      # 5. Install required Android packages
+      # 5. Android SDK / NDK
       # ============================================================
 
       - name: Install Android SDK and NDK
@@ -111,14 +108,14 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "Android licenses"
+          echo "Accept licenses"
           echo "=========================================="
 
           yes | sdkmanager --licenses || true
 
           echo
           echo "=========================================="
-          echo "Install packages"
+          echo "Install required packages"
           echo "=========================================="
 
           sdkmanager \
@@ -145,7 +142,7 @@ jobs:
           echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
           echo "=========================================="
-          echo "Android NDK"
+          echo "NDK"
           echo "=========================================="
 
           echo "$NDK"
@@ -162,7 +159,7 @@ jobs:
 
 
       # ============================================================
-      # 8. Show environment
+      # 8. Build information
       # ============================================================
 
       - name: Show build environment
@@ -175,6 +172,14 @@ jobs:
           echo "=========================================="
 
           go version
+
+          echo
+          echo "GOHOSTOS:"
+          go env GOHOSTOS
+
+          echo
+          echo "GOHOSTARCH:"
+          go env GOHOSTARCH
 
           echo
           echo "=========================================="
@@ -199,34 +204,14 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "NDK"
+          echo "Android NDK"
           echo "=========================================="
 
           echo "$ANDROID_NDK_HOME"
 
-          echo
-          echo "=========================================="
-          echo "Source revisions"
-          echo "=========================================="
-
-          echo "ARAM-EMU:"
-          git -C aram-emu rev-parse HEAD
-
-          echo
-          echo "ARAM-CORE:"
-          git -C aram-core rev-parse HEAD
-
-          echo
-          echo "ARAM-FRONTEND:"
-          git -C aram-frontend rev-parse HEAD
-
-          echo
-          echo "ARAM-AUTHD:"
-          git -C aram-authd rev-parse HEAD
-
 
       # ============================================================
-      # 9. ARM32 compatibility patch
+      # 9. ARM32 source compatibility patch
       # ============================================================
 
       - name: Patch ARAM-CORE for ARM32
@@ -260,7 +245,7 @@ jobs:
               print("ARM32 compatibility patch already exists.")
 
           else:
-              print("ERROR: ARM32 patch target not found.")
+              print("ERROR: Expected expression was not found.")
 
               for number, line in enumerate(
                   text.splitlines(),
@@ -274,15 +259,16 @@ jobs:
 
 
       # ============================================================
-      # 10. Configure ARM32 Clang
+      # 10. Create ARM32 Clang wrappers
       #
-      # DO NOT set GOARCH=arm or GOARM=7.
+      # IMPORTANT:
+      # These are NOT exported through GITHUB_ENV.
       #
-      # ARM32 is selected by the Android clang target and
-      # ebitenmobile -target android/arm.
+      # This prevents gomobile itself from being compiled with
+      # the ARM32 compiler.
       # ============================================================
 
-      - name: Configure ARM32 Clang
+      - name: Prepare ARM32 compiler
         shell: bash
         run: |
           set -eux
@@ -323,8 +309,12 @@ jobs:
           chmod +x /tmp/aram-arm32-clang++
 
 
-          echo "CC=/tmp/aram-arm32-clang" >> "$GITHUB_ENV"
-          echo "CXX=/tmp/aram-arm32-clang++" >> "$GITHUB_ENV"
+          echo
+          echo "ARM32 compiler wrappers created."
+
+          ls -l \
+            /tmp/aram-arm32-clang \
+            /tmp/aram-arm32-clang++
 
 
       # ============================================================
@@ -343,15 +333,24 @@ jobs:
           }
           EOF
 
+
           /tmp/aram-arm32-clang \
             -marm \
             /tmp/test-arm32.c \
             -o /tmp/test-arm32
 
+
+          echo "=========================================="
+          echo "ARM32 compiler output"
+          echo "=========================================="
+
+
           file /tmp/test-arm32
+
 
           file /tmp/test-arm32 | grep -Eiq \
             "ELF 32-bit.*ARM"
+
 
           echo
           echo "ARM32 compiler test PASSED."
@@ -359,6 +358,12 @@ jobs:
 
       # ============================================================
       # 12. Install ebitenmobile
+      #
+      # IMPORTANT:
+      # CC/CXX are explicitly unset here.
+      #
+      # Therefore gomobile itself is compiled for the Linux
+      # amd64 GitHub runner.
       # ============================================================
 
       - name: Install ebitenmobile
@@ -367,35 +372,75 @@ jobs:
         run: |
           set -eux
 
+          unset CC
+          unset CXX
+
           VERSION="$(
             go list -m -f '{{.Version}}' \
               github.com/hajimehoshi/ebiten/v2
           )"
 
-          echo "Ebitengine:"
+          echo "Ebitengine version:"
           echo "$VERSION"
+
 
           go install \
             "github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@$VERSION"
 
+
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+
           echo
-          echo "ebitenmobile:"
+          echo "=========================================="
+          echo "ebitenmobile"
+          echo "=========================================="
+
+
           ebitenmobile version || true
 
 
       # ============================================================
-      # 13. Build ARM32 AAR
+      # 13. Verify host gomobile
+      # ============================================================
+
+      - name: Verify host tools
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          set -eux
+
+          unset CC
+          unset CXX
+
+          echo "=========================================="
+          echo "Host architecture"
+          echo "=========================================="
+
+          go env GOHOSTOS
+          go env GOHOSTARCH
+
+          echo
+          echo "=========================================="
+          echo "ebitenmobile location"
+          echo "=========================================="
+
+          which ebitenmobile
+
+          file "$(which ebitenmobile)" || true
+
+
+      # ============================================================
+      # 14. Build ARM32 AAR
       #
-      # IMPORTANT:
-      # No GOARCH
-      # No GOARM
-      # No GOOS
+      # CC/CXX are supplied ONLY to this command.
       #
-      # Otherwise gomobile itself can become ARM32 and produce:
+      # This is the important fix for:
       #
-      # exec format error
+      # gcc_amd64.S
+      # pushq %rbx
+      #
+      # errors.
       # ============================================================
 
       - name: Build ARM32 AAR
@@ -403,6 +448,8 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: "1"
+          CC: /tmp/aram-arm32-clang
+          CXX: /tmp/aram-arm32-clang++
         run: |
           set -eux
 
@@ -412,8 +459,11 @@ jobs:
           echo "Building ARM32 AAR"
           echo "=========================================="
 
-          echo "Host:"
+          echo "Host OS:"
           go env GOHOSTOS
+
+          echo
+          echo "Host architecture:"
           go env GOHOSTARCH
 
           echo
@@ -428,6 +478,11 @@ jobs:
           echo "Android target:"
           echo "android/arm"
 
+          echo
+          echo "=========================================="
+          echo "ebitenmobile bind"
+          echo "=========================================="
+
 
           ebitenmobile bind \
             -target android/arm \
@@ -441,6 +496,7 @@ jobs:
 
           test -s android/app/libs/aram.aar
 
+
           echo
           echo "=========================================="
           echo "ARM32 AAR CREATED"
@@ -450,7 +506,7 @@ jobs:
 
 
       # ============================================================
-      # 14. Inspect AAR
+      # 15. Inspect AAR
       # ============================================================
 
       - name: Inspect ARM32 AAR
@@ -463,12 +519,13 @@ jobs:
           echo "Native libraries inside AAR"
           echo "=========================================="
 
-          unzip -l android/app/libs/aram.aar \
+          unzip -l \
+            android/app/libs/aram.aar \
             | grep -E '\.so$' || true
 
 
       # ============================================================
-      # 15. Build ARM32 APK
+      # 16. Build ARM32 APK
       # ============================================================
 
       - name: Build ARM32 APK
@@ -487,6 +544,7 @@ jobs:
 
           echo "$ARAM_ANDROID_ABIS"
 
+
           gradle \
             --no-daemon \
             --stacktrace \
@@ -495,7 +553,7 @@ jobs:
 
 
       # ============================================================
-      # 16. Locate APK
+      # 17. Locate APK
       # ============================================================
 
       - name: Locate APK
@@ -516,7 +574,7 @@ jobs:
 
 
       # ============================================================
-      # 17. Verify ARM32 only
+      # 18. ABI verification
       # ============================================================
 
       - name: Verify ARM32 APK
@@ -551,7 +609,9 @@ jobs:
 
           mkdir -p /tmp/aram-apk
 
-          unzip -q "$APK" -d /tmp/aram-apk
+          unzip -q \
+            "$APK" \
+            -d /tmp/aram-apk
 
 
           echo
@@ -561,7 +621,7 @@ jobs:
 
 
           if [ ! -d "/tmp/aram-apk/lib" ]; then
-            echo "ERROR: lib directory missing."
+            echo "ERROR: APK has no lib directory."
             exit 1
           fi
 
@@ -575,7 +635,9 @@ jobs:
             | sort
 
 
+          # --------------------------------------------------------
           # ARM32 MUST exist
+          # --------------------------------------------------------
 
           if [ ! -d "/tmp/aram-apk/lib/armeabi-v7a" ]; then
             echo
@@ -585,7 +647,9 @@ jobs:
           fi
 
 
+          # --------------------------------------------------------
           # ARM64 MUST NOT exist
+          # --------------------------------------------------------
 
           if [ -d "/tmp/aram-apk/lib/arm64-v8a" ]; then
             echo
@@ -595,7 +659,9 @@ jobs:
           fi
 
 
+          # --------------------------------------------------------
           # x86_64 MUST NOT exist
+          # --------------------------------------------------------
 
           if [ -d "/tmp/aram-apk/lib/x86_64" ]; then
             echo
@@ -605,7 +671,9 @@ jobs:
           fi
 
 
+          # --------------------------------------------------------
           # x86 MUST NOT exist
+          # --------------------------------------------------------
 
           if [ -d "/tmp/aram-apk/lib/x86" ]; then
             echo
@@ -619,6 +687,7 @@ jobs:
           echo "=========================================="
           echo "Native libraries"
           echo "=========================================="
+
 
           find \
             /tmp/aram-apk/lib \
@@ -654,7 +723,7 @@ jobs:
 
               echo
               echo "ERROR:"
-              echo "This library is NOT ARM32:"
+              echo "This is NOT an ARM32 library:"
               echo "$SO_FILE"
 
               exit 1
@@ -672,7 +741,7 @@ jobs:
           if [ "$SO_COUNT" -eq 0 ]; then
             echo
             echo "ERROR:"
-            echo "No native .so files found."
+            echo "No native libraries found."
             exit 1
           fi
 
@@ -696,7 +765,7 @@ jobs:
 
 
       # ============================================================
-      # 18. Prepare APK
+      # 19. Prepare final APK
       # ============================================================
 
       - name: Prepare APK
@@ -706,6 +775,7 @@ jobs:
           set -eux
 
           mkdir -p dist
+
 
           APK="$(
             find \
@@ -732,12 +802,13 @@ jobs:
           echo "FINAL APK"
           echo "=========================================="
 
+
           ls -lh \
             dist/aram-android-arm32.apk
 
 
       # ============================================================
-      # 19. Upload APK
+      # 20. Upload APK
       # ============================================================
 
       - name: Upload ARM32 APK
