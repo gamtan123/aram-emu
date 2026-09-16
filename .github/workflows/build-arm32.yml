@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # ==========================================
       # 1. Checkout ARAM-EMU
       # ==========================================
@@ -57,4 +58,7 @@ jobs:
           java-version: '17'
 
       # ==========================================
-      # 5.
+      # 5. Android SDK
+      # ==========================================
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
