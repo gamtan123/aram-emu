@@ -1,98 +1,480 @@
-name: Build ARAM Android Universal APK
+name: Build ARAM ARM32 APK
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  CORE_SHA: 7f699ecd04ecc22a031905a5d15f17e2b3818843
+  FRONTEND_SHA: 3f3ff549199a4593ba5a7a0e86f59d1494d9658d
+  AUTHD_SHA: 4053607356dd89e621740388f7ec761e27ecee58
+
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  build-arm32:
+    name: Build armeabi-v7a APK
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      # ------------------------------------------------------------
+      # 1. Checkout aram-emu
+      # ------------------------------------------------------------
+      - name: Check out aram-emu
+        uses: actions/checkout@v6
+        with:
+          path: aram-emu
+          persist-credentials: false
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      # ------------------------------------------------------------
+      # 2. Checkout exact component versions
+      # ------------------------------------------------------------
+      - name: Check out aram-core
+        uses: actions/checkout@v6
+        with:
+          repository: mirusu400/aram-core
+          ref: ${{ env.CORE_SHA }}
+          path: aram-core
+          persist-credentials: false
+
+      - name: Check out aram-frontend
+        uses: actions/checkout@v6
+        with:
+          repository: mirusu400/aram-frontend
+          ref: ${{ env.FRONTEND_SHA }}
+          path: aram-frontend
+          persist-credentials: false
+
+      - name: Check out aram-authd
+        uses: actions/checkout@v6
+        with:
+          repository: mirusu400/aram-authd
+          ref: ${{ env.AUTHD_SHA }}
+          path: aram-authd
+          persist-credentials: false
+
+      # ------------------------------------------------------------
+      # 3. Go
+      # IMPORTANT:
+      # Do NOT set GOOS/GOARCH/GOARM/CC/CXX globally.
+      # ebitenmobile must build its host tools for linux/amd64 first.
+      # ------------------------------------------------------------
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.x
+          cache: false
+
+      # ------------------------------------------------------------
+      # 4. Java
+      # ------------------------------------------------------------
+      - name: Set up Java
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+      # ------------------------------------------------------------
+      # 5. Gradle
+      # ------------------------------------------------------------
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
         with:
-          cmdline-tools-version: 14742923
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: true
-          packages: platform-tools
+          gradle-version: "8.14.1"
+          cache-provider: basic
 
-      - name: Inspect project
+      # ------------------------------------------------------------
+      # 6. Android NDK
+      #
+      # Do NOT use android-actions/setup-android.
+      # GitHub's Android SDK already contains sdkmanager.
+      # ------------------------------------------------------------
+      - name: Install Android NDK
+        shell: bash
         run: |
-          echo "=== ROOT ==="
+          set -euxo pipefail
+
+          echo "=========================================="
+          echo "Android SDK / NDK setup"
+          echo "=========================================="
+
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+
+          sdkmanager="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "${sdkmanager}" ]; then
+            echo "ERROR: sdkmanager not found:"
+            echo "${sdkmanager}"
+            exit 1
+          fi
+
+          "${sdkmanager}" --version
+
+          "${sdkmanager}" "ndk;28.2.13676358"
+
+          test -d "${ANDROID_HOME}/ndk/28.2.13676358"
+
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/28.2.13676358" >> "${GITHUB_ENV}"
+
+          echo
+          echo "NDK installed:"
+          ls -ld "${ANDROID_HOME}/ndk/28.2.13676358"
+
+      # ------------------------------------------------------------
+      # 7. Check workspace
+      # ------------------------------------------------------------
+      - name: Verify source tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "=========================================="
+          echo "Workspace"
+          echo "=========================================="
+
+          pwd
           ls -la
 
-          echo "=== FILES ==="
-          find . -maxdepth 4 -type f | sort | head -500
+          test -f aram-emu/go.mod
+          test -d aram-emu/mobile
+          test -d aram-emu/android
 
-      - name: Find Gradle project
-        run: |
-          echo "=== Gradle files ==="
-          find . -name "gradlew" -o -name "build.gradle" -o -name "build.gradle.kts" | sort
+          test -d aram-core
+          test -d aram-frontend
+          test -d aram-authd
 
-      - name: Build Android APK
+          echo
+          echo "Go:"
+          go version
+
+          echo
+          echo "Java:"
+          java -version
+
+          echo
+          echo "Gradle:"
+          gradle --version
+
+      # ------------------------------------------------------------
+      # 8. Build ARM32 AAR
+      #
+      # CRITICAL:
+      # ebitenmobile itself is installed as a HOST linux/amd64 tool.
+      #
+      # We do NOT export:
+      #   GOOS=android
+      #   GOARCH=arm
+      #   GOARM=7
+      #   CC=...
+      #   CXX=...
+      #
+      # Target selection belongs ONLY to:
+      #   -target android/arm
+      # ------------------------------------------------------------
+      - name: Build ARM32 AAR
+        working-directory: aram-emu
+        shell: bash
+        env:
+          CORE_SHA: ${{ env.CORE_SHA }}
+          FRONTEND_SHA: ${{ env.FRONTEND_SHA }}
+          AUTHD_SHA: ${{ env.AUTHD_SHA }}
         run: |
-          if [ ! -f "./gradlew" ]; then
-            echo "ERROR: gradlew not found in repository root."
+          set -euxo pipefail
+
+          echo "=========================================="
+          echo "Installing matching ebitenmobile"
+          echo "=========================================="
+
+          echo "Host OS:"
+          go env GOHOSTOS
+
+          echo "Host architecture:"
+          go env GOHOSTARCH
+
+          ebiten_version="$(go list -m -f '{{.Version}}' github.com/hajimehoshi/ebiten/v2)"
+
+          echo
+          echo "Ebitengine version from go.mod:"
+          echo "${ebiten_version}"
+
+          go install "github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@${ebiten_version}"
+
+          echo
+          echo "ebitenmobile:"
+          command -v ebitenmobile
+
+          mkdir -p android/app/libs
+          mkdir -p android/app/src/main/assets
+
+          emu_short="${GITHUB_SHA::7}"
+          core_short="${CORE_SHA::7}"
+          frontend_short="${FRONTEND_SHA::7}"
+
+          build_version="Nightly-ARM32-${emu_short}-c${core_short}-f${frontend_short}"
+
+          echo
+          echo "=========================================="
+          echo "Building ARM32 AAR"
+          echo "=========================================="
+          echo "Build version: ${build_version}"
+          echo "Target: android/arm"
+          echo "Expected ABI: armeabi-v7a"
+          echo "Android API: 23"
+          echo "=========================================="
+
+          ebitenmobile bind \
+            -target android/arm \
+            -androidapi 23 \
+            -trimpath \
+            -ldflags="-s -w -X=github.com/mirusu400/aram-frontend/frontend.BuildVersion=${build_version}" \
+            -javapkg io.github.mirusu400.aram \
+            -o android/app/libs/aram.aar \
+            ./mobile
+
+          test -s android/app/libs/aram.aar
+
+          {
+            echo "aram-emu=${GITHUB_SHA}"
+            echo "aram-core=${CORE_SHA}"
+            echo "aram-frontend=${FRONTEND_SHA}"
+            echo "aram-authd=${AUTHD_SHA}"
+            echo "abi=armeabi-v7a"
+          } > android/app/src/main/assets/BUILD-INFO.txt
+
+          echo
+          echo "=========================================="
+          echo "AAR created"
+          echo "=========================================="
+
+          ls -lh android/app/libs/aram.aar
+
+          echo
+          echo "AAR native libraries:"
+          unzip -l android/app/libs/aram.aar | grep -E '\.so$' || true
+
+          echo "ARAM_BUILD_VERSION=${build_version}" >> "${GITHUB_ENV}"
+
+      # ------------------------------------------------------------
+      # 9. Verify the AAR itself is ARM32 only
+      # ------------------------------------------------------------
+      - name: Verify ARM32 AAR
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          aar="android/app/libs/aram.aar"
+
+          test -s "${aar}"
+
+          echo "=========================================="
+          echo "Checking AAR ABI"
+          echo "=========================================="
+
+          unzip -Z1 "${aar}" | grep -E '\.so$' || true
+
+          if ! unzip -Z1 "${aar}" | grep -q '^jni/armeabi-v7a/libgojni.so$'; then
+            echo "ERROR: armeabi-v7a/libgojni.so is missing from AAR"
             exit 1
           fi
 
-          chmod +x ./gradlew
+          for forbidden in arm64-v8a x86 x86_64; do
+            if unzip -Z1 "${aar}" | grep -q "^jni/${forbidden}/"; then
+              echo "ERROR: forbidden ABI found in AAR: ${forbidden}"
+              exit 1
+            fi
+          done
 
-          ./gradlew assembleRelease \
+          echo
+          echo "OK: AAR contains armeabi-v7a only."
+
+      # ------------------------------------------------------------
+      # 10. Build official GitHub/Nightly Android variant
+      # ------------------------------------------------------------
+      - name: Build armeabi-v7a APK
+        working-directory: aram-emu
+        shell: bash
+        env:
+          ARAM_VERSION_CODE: ${{ github.run_number }}
+          ARAM_VERSION_NAME: ${{ github.sha }}
+        run: |
+          set -euxo pipefail
+
+          echo "=========================================="
+          echo "Building GithubDebug APK"
+          echo "=========================================="
+
+          gradle \
             --no-daemon \
-            --stacktrace
+            --stacktrace \
+            -p android \
+            :app:lintGithubDebug \
+            :app:assembleGithubDebug
 
-      - name: Find generated APK
-        run: |
-          echo "=== APK files ==="
-          find . -type f -name "*.apk" -print
+          apk="android/app/build/outputs/apk/github/debug/app-github-debug.apk"
 
-          APK=$(find . -type f -name "*.apk" | head -n 1)
+          if [ ! -s "${apk}" ]; then
+            echo "ERROR: APK was not generated:"
+            echo "${apk}"
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated."
+            echo
+            echo "Available APK files:"
+            find android -type f -name "*.apk" -print || true
+
             exit 1
           fi
 
-          echo "Found APK:"
-          echo "$APK"
+          echo
+          echo "APK generated:"
+          ls -lh "${apk}"
 
-          cp "$APK" aram-android-universal.apk
-
-      - name: Check APK
+      # ------------------------------------------------------------
+      # 11. STRICT APK ABI check
+      #
+      # Must contain:
+      #   armeabi-v7a/libgojni.so
+      #
+      # Must NOT contain:
+      #   arm64-v8a
+      #   x86
+      #   x86_64
+      # ------------------------------------------------------------
+      - name: Verify APK is armeabi-v7a only
+        working-directory: aram-emu
+        shell: bash
         run: |
-          echo "=== Final APK ==="
-          ls -lh aram-android-universal.apk
+          set -euxo pipefail
 
-          echo ""
-          echo "=== APK libraries ==="
-          unzip -l aram-android-universal.apk | grep "lib/" || true
+          apk="android/app/build/outputs/apk/github/debug/app-github-debug.apk"
 
-          echo ""
-          echo "=== ABI check ==="
+          test -s "${apk}"
 
-          if unzip -l aram-android-universal.apk | grep -q "lib/armeabi-v7a/"; then
-            echo "OK: armeabi-v7a is included."
-          else
-            echo "WARNING: armeabi-v7a is NOT included."
+          echo "=========================================="
+          echo "APK native libraries"
+          echo "=========================================="
+
+          unzip -Z1 "${apk}" | grep '^lib/' || true
+
+          echo
+          echo "=========================================="
+          echo "Checking armeabi-v7a"
+          echo "=========================================="
+
+          if ! unzip -Z1 "${apk}" | grep -q '^lib/armeabi-v7a/libgojni.so$'; then
+            echo "ERROR: armeabi-v7a/libgojni.so is missing."
+            exit 1
           fi
 
-          if unzip -l aram-android-universal.apk | grep -q "lib/arm64-v8a/"; then
-            echo "INFO: arm64-v8a is included."
+          echo "OK: armeabi-v7a/libgojni.so found."
+
+          echo
+          echo "=========================================="
+          echo "Checking forbidden ABIs"
+          echo "=========================================="
+
+          for forbidden in arm64-v8a x86 x86_64; do
+            if unzip -Z1 "${apk}" | grep -q "^lib/${forbidden}/"; then
+              echo "ERROR: forbidden ABI found: ${forbidden}"
+              exit 1
+            else
+              echo "OK: ${forbidden} not present"
+            fi
+          done
+
+          count="$(unzip -Z1 "${apk}" | grep -c '/libgojni.so$')"
+
+          echo
+          echo "libgojni.so count: ${count}"
+
+          if [ "${count}" -ne 1 ]; then
+            echo "ERROR: Expected exactly one libgojni.so."
+            exit 1
           fi
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+          echo
+          echo "=========================================="
+          echo "ARM32 ABI verification PASSED"
+          echo "=========================================="
+
+      # ------------------------------------------------------------
+      # 12. Check ELF architecture
+      # ------------------------------------------------------------
+      - name: Verify native library ELF
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          apk="android/app/build/outputs/apk/github/debug/app-github-debug.apk"
+
+          tmp="$(mktemp)"
+
+          unzip -p "${apk}" \
+            lib/armeabi-v7a/libgojni.so \
+            > "${tmp}"
+
+          echo "=========================================="
+          echo "ELF header"
+          echo "=========================================="
+
+          readelf -h "${tmp}"
+
+          machine="$(readelf -h "${tmp}" | grep 'Machine:' || true)"
+
+          echo
+          echo "${machine}"
+
+          if ! echo "${machine}" | grep -qi 'ARM'; then
+            echo "ERROR: native library is not ARM."
+            rm -f "${tmp}"
+            exit 1
+          fi
+
+          if echo "${machine}" | grep -qi 'AArch64'; then
+            echo "ERROR: native library is ARM64, not ARM32."
+            rm -f "${tmp}"
+            exit 1
+          fi
+
+          rm -f "${tmp}"
+
+          echo
+          echo "OK: native library is ARM32."
+
+      # ------------------------------------------------------------
+      # 13. Package final APK
+      # ------------------------------------------------------------
+      - name: Prepare final APK
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p dist
+
+          cp \
+            android/app/build/outputs/apk/github/debug/app-github-debug.apk \
+            dist/aram-android-arm32-armeabi-v7a.apk
+
+          test -s dist/aram-android-arm32-armeabi-v7a.apk
+
+          echo "=========================================="
+          echo "FINAL APK"
+          echo "=========================================="
+
+          ls -lh dist/aram-android-arm32-armeabi-v7a.apk
+
+          echo
+          echo "SHA256:"
+          sha256sum dist/aram-android-arm32-armeabi-v7a.apk
+
+      # ------------------------------------------------------------
+      # 14. Upload Artifact
+      # ------------------------------------------------------------
+      - name: Upload ARM32 APK
+        uses: actions/upload-artifact@v7
         with:
-          name: aram-android-universal
-          path: aram-android-universal.apk
+          name: aram-android-arm32-armeabi-v7a
+          path: aram-emu/dist/aram-android-arm32-armeabi-v7a.apk
           if-no-files-found: error
+          retention-days: 14
