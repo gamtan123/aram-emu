@@ -131,6 +131,45 @@ jobs:
               )
           PY
 
+      - name: Patch secondary keypad permission denial
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/src/main/java/io/github/mirusu400/aram/app/MainActivity.java")
+          s = p.read_text(encoding="utf-8")
+
+          start = "    private void launchSecondaryKeypad() {\n"
+          end = "\n    private Display pickOtherDisplay() {"
+          if s.count(start) != 1 or s.count(end) != 1:
+              raise SystemExit("ERROR: Secondary keypad method boundaries were not found")
+          before, method = s.split(start, 1)
+          method, after = method.split(end, 1)
+
+          old = "        startActivity(intent, options.toBundle());"
+          new = """        try {
+                      startActivity(intent, options.toBundle());
+                  } catch (SecurityException e) {
+                      Log.w("aram-dualscreen", "Secondary keypad launch denied; continuing on main display", e);
+                  }"""
+
+          if "import android.util.Log;" not in s:
+              raise SystemExit("ERROR: android.util.Log import was not found")
+
+          if method.count(new) == 1:
+              print("Secondary keypad SecurityException patch already applied")
+          elif method.count(old) == 1 and method.count("startActivity(") == 1:
+              method = method.replace(old, new, 1)
+              p.write_text(before + start + method + end + after, encoding="utf-8")
+              print("Secondary keypad SecurityException patch applied")
+          else:
+              raise SystemExit("ERROR: Secondary keypad launch patch target was not found")
+          PY
+
       - name: Build ARM32 AAR
         working-directory: aram-emu
         shell: bash
