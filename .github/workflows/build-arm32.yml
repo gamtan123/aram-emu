@@ -3,6 +3,9 @@ name: Build ARAM ARM32 APK
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CORE_SHA: 7f699ecd04ecc22a031905a5d15f17e2b3818843
   FRONTEND_SHA: 3f3ff549199a4593ba5a7a0e86f59d1494d9658d
@@ -10,6 +13,7 @@ env:
 
 jobs:
   build:
+    name: Build armeabi-v7a APK
     runs-on: ubuntu-latest
 
     steps:
@@ -17,6 +21,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: aram-emu
+          persist-credentials: false
 
       - name: Checkout aram-core
         uses: actions/checkout@v6
@@ -24,6 +29,7 @@ jobs:
           repository: mirusu400/aram-core
           ref: ${{ env.CORE_SHA }}
           path: aram-core
+          persist-credentials: false
 
       - name: Checkout aram-frontend
         uses: actions/checkout@v6
@@ -31,6 +37,7 @@ jobs:
           repository: mirusu400/aram-frontend
           ref: ${{ env.FRONTEND_SHA }}
           path: aram-frontend
+          persist-credentials: false
 
       - name: Checkout aram-authd
         uses: actions/checkout@v6
@@ -38,15 +45,7 @@ jobs:
           repository: mirusu400/aram-authd
           ref: ${{ env.AUTHD_SHA }}
           path: aram-authd
-
-      - name: Prepare sources
-        run: |
-          rm -rf aram-emu/aram-core
-          rm -rf aram-emu/aram-frontend
-          rm -rf aram-emu/aram-authd
-          mv aram-core aram-emu/aram-core
-          mv aram-frontend aram-emu/aram-frontend
-          mv aram-authd aram-emu/aram-authd
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -66,28 +65,54 @@ jobs:
           packages: ''
 
       - name: Install Android packages
+        shell: bash
         run: |
+          set -euxo pipefail
+
           sdkmanager \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;35.0.0" \
             "ndk;28.2.13676358"
 
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          NDK="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
+
+          test -d "$NDK"
+
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.1'
 
+      - name: Verify workspace
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -f aram-emu/go.work
+          test -f aram-core/go.mod
+          test -f aram-frontend/go.mod
+          test -f aram-authd/go.mod
+
+          echo "Workspace OK"
+
       - name: Patch ARM32 overflow
         working-directory: aram-emu
+        shell: bash
         run: |
+          set -euxo pipefail
+
           python3 <<'PY'
           from pathlib import Path
 
-          p = Path("aram-core/application/internal/ktf/ktf_state.go")
+          p = Path("../aram-core/application/internal/ktf/ktf_state.go")
+
+          if not p.exists():
+              raise SystemExit(f"File not found: {p}")
+
           s = p.read_text()
 
           old = "if len(serviceState) > int(^uint32(0)) {"
@@ -95,84 +120,224 @@ jobs:
 
           if old in s:
               p.write_text(s.replace(old, new, 1))
-              print("ARM32 patch applied")
+              print("ARM32 overflow patch applied")
+
           elif new in s:
-              print("ARM32 patch already applied")
+              print("ARM32 overflow patch already applied")
+
           else:
-              raise SystemExit("ARM32 patch target not found")
+              raise SystemExit(
+                  "ERROR: ARM32 patch target was not found"
+              )
           PY
 
       - name: Build ARM32 AAR
         working-directory: aram-emu
+        shell: bash
         run: |
-          unset CC CXX GOOS GOARCH CGO_CFLAGS CGO_CXXFLAGS || true
+          set -euxo pipefail
 
-          VERSION="$(go list -m -f '{{.Version}}' github.com/hajimehoshi/ebiten/v2)"
+          unset CC || true
+          unset CXX || true
+          unset GOOS || true
+          unset GOARCH || true
+          unset GOARM || true
+          unset CGO_CFLAGS || true
+          unset CGO_CXXFLAGS || true
+
+          EB_VERSION="$(go list -m -f '{{.Version}}' github.com/hajimehoshi/ebiten/v2)"
+
+          echo "Ebitengine version: $EB_VERSION"
 
           go install \
-            "github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@$VERSION"
+            "github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@$EB_VERSION"
 
           mkdir -p android/app/libs
           mkdir -p android/app/src/main/assets
+
+          BUILD_VERSION="ARM32-${GITHUB_RUN_NUMBER}"
 
           ebitenmobile bind \
             -target android/arm \
             -androidapi 23 \
             -trimpath \
+            -ldflags="-s -w -X=github.com/mirusu400/aram-frontend/frontend.BuildVersion=${BUILD_VERSION}" \
             -javapkg io.github.mirusu400.aram \
             -o android/app/libs/aram.aar \
             ./mobile
 
           test -s android/app/libs/aram.aar
 
-          unzip -l android/app/libs/aram.aar | grep "armeabi-v7a/libgojni.so"
+          echo "===== AAR CONTENT ====="
+          unzip -l android/app/libs/aram.aar | grep '\.so$'
 
-          echo "abi=armeabi-v7a" \
-            > android/app/src/main/assets/BUILD-INFO.txt
+      - name: Verify ARM32 AAR
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf /tmp/aram-aar
+          mkdir -p /tmp/aram-aar
+
+          unzip -q \
+            android/app/libs/aram.aar \
+            -d /tmp/aram-aar
+
+          test -f \
+            /tmp/aram-aar/jni/armeabi-v7a/libgojni.so
+
+          echo "===== ARM32 LIBRARY ====="
+
+          file \
+            /tmp/aram-aar/jni/armeabi-v7a/libgojni.so
+
+          file \
+            /tmp/aram-aar/jni/armeabi-v7a/libgojni.so \
+            | grep -q "ELF 32-bit"
+
+          file \
+            /tmp/aram-aar/jni/armeabi-v7a/libgojni.so \
+            | grep -q "ARM"
+
+          if find /tmp/aram-aar \
+            -type f \
+            \( \
+              -path '*/arm64-v8a/*' \
+              -o -path '*/x86/*' \
+              -o -path '*/x86_64/*' \
+            \) \
+            | grep -q .; then
+
+            echo "ERROR: Non-ARM32 ABI found in AAR"
+
+            find /tmp/aram-aar \
+              -type f \
+              -name '*.so'
+
+            exit 1
+          fi
+
+          echo "ARM32 AAR OK"
+
+      - name: Create build info
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          mkdir -p android/app/src/main/assets
+
+          {
+            echo "aram-emu=$GITHUB_SHA"
+            echo "aram-core=$CORE_SHA"
+            echo "aram-frontend=$FRONTEND_SHA"
+            echo "aram-authd=$AUTHD_SHA"
+            echo "abi=armeabi-v7a"
+          } > android/app/src/main/assets/BUILD-INFO.txt
 
       - name: Build ARM32 APK
         working-directory: aram-emu/android
+        shell: bash
         env:
           ARAM_VERSION_CODE: ${{ github.run_number }}
           ARAM_VERSION_NAME: ARM32-${{ github.run_number }}
           ARAM_ANDROID_ABIS: armeabi-v7a
         run: |
-          gradle :app:assembleGithubDebug \
+          set -euxo pipefail
+
+          gradle \
+            :app:assembleGithubDebug \
             --no-daemon \
             --stacktrace
 
       - name: Prepare APK
         working-directory: aram-emu
+        shell: bash
         run: |
-          APK="$(find android/app/build/outputs/apk -type f -name '*.apk' | head -1)"
+          set -euxo pipefail
+
+          echo "===== GENERATED APK ====="
+
+          find android/app/build/outputs/apk \
+            -type f \
+            -name '*.apk' \
+            -print
+
+          APK="$(find android/app/build/outputs/apk \
+            -type f \
+            -name '*.apk' \
+            | head -1)"
 
           if [ -z "$APK" ]; then
-            echo "APK NOT FOUND"
+            echo "ERROR: APK NOT FOUND"
             exit 1
           fi
+
+          test -s "$APK"
 
           mkdir -p output
 
           cp "$APK" \
-            output/aram-android-arm32.apk
+            output/aram-android-arm32-armeabi-v7a.apk
 
-          test -s output/aram-android-arm32.apk
+          test -s \
+            output/aram-android-arm32-armeabi-v7a.apk
 
-          unzip -l output/aram-android-arm32.apk \
-            | grep "lib/armeabi-v7a/libgojni.so"
+      - name: Verify final APK
+        working-directory: aram-emu
+        shell: bash
+        run: |
+          set -euxo pipefail
 
-          if unzip -l output/aram-android-arm32.apk \
-            | grep -Eq "lib/(arm64-v8a|x86|x86_64)/"; then
-            echo "ERROR: unwanted ABI found"
+          APK="output/aram-android-arm32-armeabi-v7a.apk"
+
+          rm -rf /tmp/aram-apk
+          mkdir -p /tmp/aram-apk
+
+          unzip -q "$APK" \
+            -d /tmp/aram-apk
+
+          echo "===== APK NATIVE LIBRARIES ====="
+
+          find /tmp/aram-apk/lib \
+            -type f \
+            -name '*.so' \
+            -print
+
+          test -f \
+            /tmp/aram-apk/lib/armeabi-v7a/libgojni.so
+
+          file \
+            /tmp/aram-apk/lib/armeabi-v7a/libgojni.so
+
+          file \
+            /tmp/aram-apk/lib/armeabi-v7a/libgojni.so \
+            | grep -q "ELF 32-bit"
+
+          file \
+            /tmp/aram-apk/lib/armeabi-v7a/libgojni.so \
+            | grep -q "ARM"
+
+          if [ -d /tmp/aram-apk/lib/arm64-v8a ] || \
+             [ -d /tmp/aram-apk/lib/x86 ] || \
+             [ -d /tmp/aram-apk/lib/x86_64 ]; then
+
+            echo "ERROR: Unwanted ABI found"
+
+            find /tmp/aram-apk/lib \
+              -type f
+
             exit 1
           fi
 
-          echo "ARM32 APK OK"
-          ls -lh output/aram-android-arm32.apk
+          echo "=============================="
+          echo "ARM32 APK VERIFIED"
+          echo "ABI = armeabi-v7a"
+          echo "=============================="
 
       - name: Upload ARM32 APK
         uses: actions/upload-artifact@v4
         with:
-          name: aram-android-arm32
-          path: aram-emu/output/aram-android-arm32.apk
+          name: aram-android-arm32-armeabi-v7a
+          path: aram-emu/output/aram-android-arm32-armeabi-v7a.apk
           if-no-files-found: error
+          retention-days: 30
